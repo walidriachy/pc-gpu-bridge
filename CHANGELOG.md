@@ -13,6 +13,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - The PC's job summary now says how long a job waited in line (`queue_secs`) and whether it came from the cache (`cached`). `duration` is now only the time the program itself ran, not the time spent collecting its results.
 
 ### Fixed
+- **Commands no longer get garbled on their way to the PC.** Numbers such as `1.5` or `29.97`, sentences in a prompt (`"a red car. 4k"`) and PowerShell code were mistaken for file names and replaced with a PC folder path, so the job failed and quietly ran on the Mac instead. Now a relative argument is only treated as a file when that file really exists. A Mac path inside a shared folder is translated even when it doesn't exist yet (a new output folder), and Mac paths inside PowerShell or `cmd` code are translated and put in quotes, so folder names with spaces (like "Created Apps in claude") keep working. `cmd /c …` is no longer refused by the PC as an "outside the folder" path.
 - A ComfyUI image that failed inside ComfyUI (for example, the graphics card ran out of memory) is now reported as failed instead of "done" with no images.
 
 ## [0.1.3] — 2026-11-21

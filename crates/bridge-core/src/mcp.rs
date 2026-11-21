@@ -162,16 +162,35 @@ fn gb(v: &Value) -> String {
 
 /// Replace Mac shared-folder paths in a free-form command string with PC paths.
 pub fn translate_inline(mapper: &PathMapper, cmd: &str) -> String {
+    translate_inline_quoted(mapper, cmd, '\'')
+}
+
+/// Replace Mac paths inside shell code with PC paths. A translated path that contains a space
+/// is wrapped in `quote` unless it is already inside quotes, so the shell doesn't split it.
+pub fn translate_inline_quoted(mapper: &PathMapper, cmd: &str, quote: char) -> String {
     let mut out = cmd.to_string();
     let mut folders = mapper.folders.clone();
     folders.sort_by_key(|f| std::cmp::Reverse(f.mac_path.len()));
     for f in folders {
         let re = regex::Regex::new(&format!(r"{}(/[^\s'\x22]*)?", regex::escape(&f.mac_path))).unwrap();
-        out = re
-            .replace_all(&out, |c: &regex::Captures| {
-                mapper.mac_to_pc(Path::new(&c[0])).unwrap_or_else(|| c[0].to_string())
-            })
-            .into_owned();
+        let mut res = String::with_capacity(out.len());
+        let mut last = 0;
+        for m in re.find_iter(&out) {
+            res.push_str(&out[last..m.start()]);
+            let pc = mapper.mac_to_pc(Path::new(m.as_str())).unwrap_or_else(|| m.as_str().to_string());
+            let before = out[..m.start()].chars().last();
+            let quoted = matches!(before, Some('\'') | Some('"'));
+            if pc.contains(' ') && !quoted {
+                res.push(quote);
+                res.push_str(&pc);
+                res.push(quote);
+            } else {
+                res.push_str(&pc);
+            }
+            last = m.end();
+        }
+        res.push_str(&out[last..]);
+        out = res;
     }
     out
 }

@@ -157,6 +157,9 @@ class Settings:
 _WIN_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 
 
+_SWITCH = re.compile(r"^/[A-Za-z?][A-Za-z0-9?-]{0,7}(:[^/\\]*)?$")
+
+
 def looks_absolute(value: str) -> bool:
     """True if a string looks like an absolute Windows or POSIX path."""
     return bool(_WIN_ABS.match(value)) or value.startswith("\\\\") or value.startswith("/")
@@ -186,5 +189,7 @@ def check_argv_paths(root: Path, argv: list[str]) -> None:
     """Every absolute-path-looking argument (including ``key=C:\\...``) must sit inside the root."""
     for arg in argv[1:]:
         for piece in (arg, arg.split("=", 1)[-1]):
+            if _SWITCH.match(piece):
+                continue  # cmd /c, robocopy /MIR, ...: a switch, not a path
             if looks_absolute(piece) and not piece.startswith("//"):
                 safe_path(root, piece)

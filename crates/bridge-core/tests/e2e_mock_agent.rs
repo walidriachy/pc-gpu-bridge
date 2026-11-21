@@ -272,7 +272,8 @@ fn ffmpeg_shim_round_trip_through_mock_agent() {
             r"D:\PCBridge\workspace\w\in.mov",
             "-c:v",
             "h264_nvenc",
-            r"D:\PCBridge\workspace\w\out.mp4"
+            // New outputs keep their relative name; the PC runs in the same shared folder.
+            "out.mp4"
         ]
     );
     assert_eq!(seen.run_bodies[0]["cwd"], "workspace/w");

@@ -375,3 +375,10 @@ def test_agent_keeps_answering_while_a_job_scans_a_big_folder(tmp_path, monkeypa
     latency, state = asyncio.run(scenario())
     assert state == "done"
     assert latency < 0.6
+
+
+def test_check_argv_paths_allows_switches(tmp_path):
+    check_argv_paths(tmp_path, ["cmd", "/c", "echo", "hi"])
+    check_argv_paths(tmp_path, ["robocopy", "a", "b", "/MIR", "/R:2"])
+    with pytest.raises(PathOutsideRoot):
+        check_argv_paths(tmp_path, ["type", "/etc/passwd"])

@@ -136,6 +136,37 @@ fn is_code_flag(tool: &str, arg: &str) -> bool {
     }
 }
 
+/// "out.mp4", "renders/frame.png": a plausible new output file (no spaces, an extension with
+/// at least one letter), as opposed to "1.5", "29.97" or a sentence.
+fn looks_like_output_file(s: &str) -> bool {
+    let name = s.rsplit('/').next().unwrap_or(s);
+    !s.contains(' ')
+        && !s.contains(':')
+        && name.rsplit_once('.').is_some_and(|(stem, ext)| {
+            !stem.is_empty()
+                && (1..=5).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+                && ext.chars().any(|c| c.is_ascii_alphabetic())
+        })
+}
+
+/// The quote character for a shell whose arguments are code (powershell/pwsh: ', cmd: ").
+fn shell_quote(tool: &str) -> Option<char> {
+    let t = tool.to_ascii_lowercase();
+    match t.trim_end_matches(".exe") {
+        "powershell" | "pwsh" => Some('\''),
+        "cmd" => Some('"'),
+        _ => None,
+    }
+}
+
+fn translate_code(mapper: &PathMapper, code: &str, quote: Option<char>) -> String {
+    match quote {
+        Some(q) => crate::mcp::translate_inline_quoted(mapper, code, q),
+        None => code.to_string(),
+    }
+}
+
 /// Real tool to use on the PC (Windows has `python`, not `python3`).
 pub fn pc_tool(tool: &str) -> String {
     match tool {
@@ -160,7 +191,14 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
     let mut inputs: Vec<(PathBuf, String)> = vec![];
     let mut needs_cwd = false;
     let mut skip_next = false;
+    let shell = shell_quote(tool);
+    // powershell/pwsh -Command and cmd /c take every remaining argument as code.
+    let mut code_rest = false;
     for (i, a) in args.iter().enumerate() {
+        if code_rest {
+            argv.push(translate_code(mapper, a, shell));
+            continue;
+        }
         if skip_next {
             skip_next = false;
             argv.push(a.clone());
@@ -168,7 +206,11 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
         }
         // python -c CODE, powershell -Command CODE, …: never treat code as a path.
         if is_code_flag(tool, a) {
-            skip_next = true;
+            if shell.is_some() {
+                code_rest = true;
+            } else {
+                skip_next = true;
+            }
             argv.push(a.clone());
             continue;
         }
@@ -177,16 +219,30 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
             _ => (String::new(), a.clone()),
         };
         let Some(mac) = resolve(cwd, &value) else {
-            argv.push(a.clone());
+            // A shell's inline code (powershell without -Command) may still name Mac paths.
+            argv.push(if shell.is_some() && !a.starts_with('-') {
+                translate_code(mapper, a, shell)
+            } else {
+                a.clone()
+            });
             continue;
         };
         let exists = mac.exists();
-        let parent_exists = mac.parent().map(|p| p.exists()).unwrap_or(false);
-        if !exists && !parent_exists {
-            argv.push(a.clone()); // not a real path (e.g. "1.5", "scale=1280:-1")
+        // A relative argument is a path only if it exists: "1.5", "29.97", "a red car. 4k" or
+        // "Get-Content x.txt" are not, and new output files keep working because the PC runs
+        // in the same (shared) folder. An absolute Mac path inside a shared folder is always
+        // translated, even when it doesn't exist yet (a new output folder).
+        let absolute = Path::new(&value).is_absolute();
+        let mapped = mapper.mac_to_rel(&mac);
+        if !exists && !(absolute && mapped.is_some()) {
+            let output_name = !absolute && looks_like_output_file(&value);
+            if (absolute && mac.parent().is_some_and(|p| p.exists())) || output_name {
+                needs_cwd = true;
+            }
+            argv.push(if shell.is_some() { translate_code(mapper, a, shell) } else { a.clone() });
             continue;
         }
-        match mapper.mac_to_rel(&mac) {
+        match mapped {
             Some(rel) => {
                 if exists && mac.is_file() {
                     inputs.push((mac.clone(), rel.clone()));
@@ -596,7 +652,7 @@ mod tests {
                 "h264_nvenc",
                 "-cq",
                 "18",
-                r"D:\PCBridge\workspace\Videos\out\o.mp4"
+                "out/o.mp4"
             ])
         );
         assert_eq!(p.cwd_rel, "workspace/Videos");
@@ -767,5 +823,80 @@ mod tests {
         let d = router::decide(&big_encode, e.history.as_ref());
         assert_eq!(d.target, Target::Mac, "{d:?}");
         assert_eq!(d.mac_est_secs, 5.0);
+    }
+    fn spaced() -> (tempfile::TempDir, PathBuf, PathMapper) {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("Created Apps in claude");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("in.mov"), b"0123456789").unwrap();
+        std::fs::write(shared.join("package.json"), b"{}").unwrap();
+        let m = PathMapper::new(
+            vec![SharedFolder { mac_path: shared.display().to_string(), name: "Created Apps in claude".into() }],
+            r"D:\PCBridge",
+        );
+        (dir, shared, m)
+    }
+
+    #[test]
+    fn numbers_and_sentences_are_never_paths() {
+        let (_d, shared, m) = spaced();
+        let args = s(&["-ss", "00:00:01.5", "-i", "in.mov", "-r", "29.97", "-b:v", "2.5M", "out.mp4"]);
+        let p = plan(&m, "ffmpeg", &args, &shared).unwrap();
+        assert_eq!(p.argv[2], "00:00:01.5");
+        assert_eq!(p.argv[4], r"D:\PCBridge\workspace\Created Apps in claude\in.mov");
+        assert_eq!(&p.argv[5..], &s(&["-r", "29.97", "-b:v", "2.5M", "out.mp4"])[..]);
+        let p = plan(&m, "python3", &s(&["gen.py", "--prompt", "a red car. 4k"]), &shared).unwrap();
+        assert_eq!(p.argv[3], "a red car. 4k");
+    }
+
+    #[test]
+    fn powershell_code_is_kept_and_mac_paths_inside_are_quoted() {
+        let (_d, shared, m) = spaced();
+        let p = plan(&m, "powershell", &s(&["-NoProfile", "Get-Content package.json"]), &shared).unwrap();
+        assert_eq!(p.argv, s(&["powershell", "-NoProfile", "Get-Content package.json"]));
+        let code = format!("Get-Content {}/package.json | Measure-Object", shared.display());
+        let p = plan(&m, "powershell", &s(&["-NoProfile", "-Command", &code]), &shared).unwrap();
+        assert_eq!(
+            p.argv[3],
+            r"Get-Content 'D:\PCBridge\workspace\Created Apps in claude\package.json' | Measure-Object"
+        );
+        // -Command split over several words: all of them are code.
+        let p = plan(&m, "pwsh", &s(&["-Command", "Write-Output", "1.5"]), &shared).unwrap();
+        assert_eq!(p.argv, s(&["pwsh", "-Command", "Write-Output", "1.5"]));
+    }
+
+    #[test]
+    fn cmd_c_and_new_output_folders() {
+        let (_d, shared, m) = spaced();
+        let p = plan(&m, "cmd", &s(&["/c", "echo", "hi"]), &shared).unwrap();
+        assert_eq!(p.argv, s(&["cmd", "/c", "echo", "hi"]));
+        let new_out = shared.join("renders/run2/out.mp4");
+        let p = plan(&m, "ffmpeg", &s(&["-i", "in.mov", &new_out.display().to_string()]), &shared).unwrap();
+        assert_eq!(p.argv[3], r"D:\PCBridge\workspace\Created Apps in claude\renders\run2\out.mp4");
+    }
+
+    #[test]
+    fn new_output_in_an_unshared_folder_is_refused() {
+        let (dir, shared, m) = spaced();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let input = shared.join("in.mov").display().to_string();
+        let r = plan(&m, "ffmpeg", &s(&["-i", &input, "out.mp4"]), &elsewhere);
+        assert!(r.is_err(), "{:?}", r.map(|p| p.argv));
+        assert!(plan(&m, "ffmpeg", &s(&["-i", &input, "-r", "29.97", "-f", "null", "-"]), &elsewhere).is_ok());
+    }
+
+    #[test]
+    fn inline_translation_quotes_paths_with_spaces_once() {
+        let (_d, shared, m) = spaced();
+        let base = shared.display().to_string();
+        assert_eq!(
+            crate::mcp::translate_inline(&m, &format!("type {base}/a.txt")),
+            r"type 'D:\PCBridge\workspace\Created Apps in claude\a.txt'"
+        );
+        assert_eq!(
+            crate::mcp::translate_inline(&m, &format!("type \"{base}/a.txt\"")),
+            r#"type "D:\PCBridge\workspace\Created Apps in claude\a.txt""#
+        );
     }
 }
