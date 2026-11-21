@@ -106,6 +106,7 @@ fn snapshot() -> Snapshot {
         let c = bridge_core::client::AgentClient::new(cfg.base_url(), bridge_core::secrets::get_token());
         match c.status() {
             Ok(st) => {
+                let _ = c.post_json("/peer/memory", &serde_json::json!(bridge_core::memory::local_memory()));
                 let gpu = c.gpu().ok();
                 let label = if cfg.redirect_enabled { "PC ready" } else { "PC ready (redirecting paused)" };
                 summarize(Some(&st), gpu.as_ref(), mac_free, Light::Green, label)

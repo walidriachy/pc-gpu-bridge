@@ -54,8 +54,12 @@ def _mac() -> dict:
         v = v.strip().rstrip(".")
         if v.isdigit():
             pages[k.strip()] = int(v)
-    avail = (pages.get("Pages free", 0) + pages.get("Pages inactive", 0)
-             + pages.get("Pages speculative", 0) + pages.get("Pages purgeable", 0)) * page
+    avail = (
+        pages.get("Pages free", 0)
+        + pages.get("Pages inactive", 0)
+        + pages.get("Pages speculative", 0)
+        + pages.get("Pages purgeable", 0)
+    ) * page
     return {"total_bytes": total, "available_bytes": avail}
 
 

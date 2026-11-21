@@ -381,6 +381,9 @@ pub async fn status_snapshot() -> Result<Value, String> {
         let mac = memory::local_memory();
         let c = client(&cfg);
         let pc = c.as_ref().map(|c| c.status());
+        if let (Some(c), Some(Ok(_))) = (c.as_ref(), pc.as_ref()) {
+            let _ = c.post_json("/peer/memory", &json!(mac));
+        }
         let (reachable, pc_status, err) = match pc {
             Some(Ok(s)) => (true, s, Value::Null),
             Some(Err(e)) => (false, Value::Null, json!(e.to_string())),
