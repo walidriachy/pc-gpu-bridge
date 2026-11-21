@@ -36,7 +36,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ✅ | |
 | 7 | GitHub repo, first release, CI green | ✅ | Public repo, v0.1.0 release with `PC Bridge.dmg` + `PC Bridge Setup.exe` |
 | 8 | **v0.1.2 hardening from the first real run**: signed auto-updates, self-updating PC helper, fresh PATH for jobs, helper starts without Finish, Tailscale kept connected | ✅ | Found by the first real Windows + Mac run |
-| 9 | **v0.1.3**: missing programs (catalog, hints, `pc_install`, Settings → Programs), PyTorch in the wizard, targeted output detection, ad-hoc Mac signing + App Translocation self-heal | ✅ | Released; still to confirm on the real PC and Mac (winget codes, Blender folder, UAC prompt, signing in the release build) |
+| 9 | **v0.1.3**: missing programs (catalog, hints, `pc_install`, Settings → Programs), PyTorch in the wizard, targeted output detection, ad-hoc Mac signing + App Translocation self-heal | ✅ | Released and confirmed on the real Mac and PC: signed Mac app opens normally, PC self-updated 0.1.2 → 0.1.3, a GPU job finished in 3.2 s (was 30–60 s). Still to try: a real install from Settings → Programs (winget codes, Windows "Yes" prompt, Blender folder) |
 
 ## Detailed checklist
 
