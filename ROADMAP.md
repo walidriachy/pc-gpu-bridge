@@ -101,13 +101,17 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 ```mermaid
 timeline
   title PC Bridge roadmap
-  v0.1 — now : Both apps + wizards : Smart, memory-aware router : 14 MCP tools : CI + installers
-  v0.2 : Live job progress in the menu bar : In-app auto-update : Signed + notarised builds
+  v0.1 — now : Both apps + wizards : Smart, memory-aware router : 14 MCP tools : CI + installers : Signed auto-updates (0.1.2)
+  v0.1.3 — next : Missing programs - one-click install : Faster jobs on big shared folders : PyTorch in the wizard
+  v0.2 : Live job progress in the menu bar : Signed + notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake from away via an always-on tailnet device
 ```
 
 | Version | Item | Why |
 |---|---|---|
+| **0.1.3 (next)** | **Missing programs: tell Claude and offer a one-click install.** When a job needs a program the PC doesn't have (Blender, PyTorch…), the job result says exactly what's missing and the install command, so Claude can offer it. The PC app shows an **Install Blender** button. Programs go in their normal Windows place, never in the shared folders | Today the job just fails with "program not found" and you have to know what to install |
+| **0.1.3 (next)** | **Faster jobs on big shared folders**: look for a job's new files only in the folders it names and its own folder (with a time limit), instead of scanning the whole shared folder | Even tiny jobs take 20–45 s when the shared folder is very large |
+| **0.1.3 (next)** | **Optional "PyTorch with GPU support" in the PC wizard** (step 6, next to Ollama and ComfyUI), plus a free-space check on drive C: | The final GPU test needs PyTorch, which the wizard didn't install (found on the first real run) |
 | 0.2 | Live progress (percent / ETA) for ffmpeg and ComfyUI jobs in the menu bar | Long encodes currently show only "running" |
 | 0.2 | Code signing + notarisation | Removes the "unidentified developer" / SmartScreen steps |
 | 0.2 | Send whole project folders for Node/Docker without a separate `npm ci` on the PC | Removes a known limitation |
