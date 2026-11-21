@@ -61,12 +61,30 @@ def test_health_and_auth(env):
     assert env["client"].get("/memory").json()["total_bytes"] > 0
 
 
+def test_peer_memory_reported_by_mac(env):
+    c = env["client"]
+    assert c.get("/status").json()["peer_memory"] is None
+    assert TestClient(env["app"]).post("/peer/memory", json={}).status_code == 401
+    c.post("/peer/memory", json={"total_bytes": 16, "available_bytes": 3, "pressure": "warn", "junk": 1})
+    pm = c.get("/status").json()["peer_memory"]
+    assert pm["available_bytes"] == 3 and pm["pressure"] == "warn" and "junk" not in pm and pm["ts"] > 0
+
+
 def test_run_streams_and_exit_code(env):
     c = env["client"]
     (env["root"] / "workspace" / "proj").mkdir(parents=True)
-    r = c.post("/run", json={
-        "argv": [sys.executable, "-c", "import sys;print('hello');sys.stderr.write('warn\\n');sys.exit(4)"],
-        "cwd": "workspace/proj", "name": "test job"})
+    r = c.post(
+        "/run",
+        json={
+            "argv": [
+                sys.executable,
+                "-c",
+                "import sys;print('hello');sys.stderr.write('warn\\n');sys.exit(4)",
+            ],
+            "cwd": "workspace/proj",
+            "name": "test job",
+        },
+    )
     evs = ndjson(r)
     types = [e["type"] for e in evs]
     assert types[0] == "job" and "started" in types and types[-1] == "exit"
@@ -82,8 +100,12 @@ def test_run_cache_hit(env):
     ws = env["root"] / "workspace"
     (ws / "in.txt").write_text("abc")
     script = "import pathlib;pathlib.Path('out.txt').write_text(pathlib.Path('in.txt').read_text()[::-1])"
-    body = {"argv": [sys.executable, "-c", script], "cwd": "workspace", "inputs": ["workspace/in.txt"],
-            "stream": False}
+    body = {
+        "argv": [sys.executable, "-c", script],
+        "cwd": "workspace",
+        "inputs": ["workspace/in.txt"],
+        "stream": False,
+    }
     first = c.post("/run", json=body).json()
     assert first["exit_code"] == 0 and not first["cached"]
     (ws / "out.txt").unlink()

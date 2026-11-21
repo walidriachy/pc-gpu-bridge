@@ -132,8 +132,9 @@ class JobQueue:
             self._cond = asyncio.Condition()
         return self._cond
 
-    def create(self, kind: str, name: str, argv: list[str], cwd: Path, gpu: bool = True,
-               env: dict | None = None) -> Job:
+    def create(
+        self, kind: str, name: str, argv: list[str], cwd: Path, gpu: bool = True, env: dict | None = None
+    ) -> Job:
         jid = uuid.uuid4().hex[:10]
         day = dt.date.today().isoformat()
         folder = self.root / "jobs" / day / f"{jid}_{short_name(name)}"
@@ -238,13 +239,15 @@ class JobQueue:
             except Exception:  # noqa: BLE001
                 pass
         job.write_meta()
-        job.emit({
-            "type": "exit",
-            "code": code,
-            "state": job.state,
-            "duration": round(job.finished - job.started, 3),
-            "outputs": job.outputs,
-        })
+        job.emit(
+            {
+                "type": "exit",
+                "code": code,
+                "state": job.state,
+                "duration": round(job.finished - job.started, 3),
+                "outputs": job.outputs,
+            }
+        )
 
     async def _pump(self, job: Job, stream: asyncio.StreamReader | None, kind: str) -> None:
         if stream is None:

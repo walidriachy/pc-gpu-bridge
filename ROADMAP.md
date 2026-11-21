@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — Phases 1–2 complete (agent 26 tests, core 42 tests incl. real Rust↔Python e2e); Phase 3 (app) in progress_
+_Last updated: 2026-11-21 — Phases 1–4 complete (agent 30 tests, core 44 tests incl. real Rust↔Python e2e, UI 6 tests; clippy/eslint/ruff clean); Phase 5 (CI + release) next_
 
 ## Architecture in one picture
 
@@ -27,12 +27,12 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | # | Phase | Status | Notes |
 |---|-------|--------|-------|
 | 0 | Repo scaffold, roadmap, architecture | ✅ | |
-| 1 | PC agent (FastAPI): /run /delegate /status /gpu /memory /files /cancel /pair, queue, strict root, cache, cleanup | ✅ | 26 tests, ruff clean |
-| 2 | `bridge-core` Rust crate: path mapping, **memory-aware** router, GPU/RAM job detection, ffmpeg NVENC rewrite, agent client, MCP server | ✅ | 42 tests, clippy clean |
-| 2b | **Memory-aware routing (added 2026-11-21)**: Mac memory pressure, RAM estimates, docker/node/npm/pnpm shims (opt-in per project), generic `pc_run_task`, Mac vs PC RAM side by side, Help text | 🔄 | engine ✅; UI pieces in Phase 3 |
-| 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | 🔄 | |
-| 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ⏳ | |
-| 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | ⏳ | |
+| 1 | PC agent (FastAPI): /run /delegate /status /gpu /memory /files /cancel /pair, queue, strict root, cache, cleanup | ✅ | 30 tests, ruff clean |
+| 2 | `bridge-core` Rust crate: path mapping, **memory-aware** router, GPU/RAM job detection, ffmpeg NVENC rewrite, agent client, MCP server | ✅ | 44 tests, clippy clean |
+| 2b | **Memory-aware routing (added 2026-11-21)**: Mac memory pressure, RAM estimates, docker/node/npm/pnpm shims (opt-in per project), generic `pc_run_task`, Mac vs PC RAM side by side, Help text | ✅ | Mac reports its RAM to the PC (`POST /peer/memory`) so both apps show Mac vs PC |
+| 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | ✅ | React + TS, light/dark |
+| 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ✅ | Windows paths verified in CI build only (no Windows box here) |
+| 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | 🔄 | |
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ⏳ | |
 | 7 | GitHub repo, first release, CI green | ⏳ | |
 
@@ -40,7 +40,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 
 ### Phase 1 — PC agent
 - [x] Config + strict root resolution (`D:\PCBridge` → fallback `C:\PCBridge`; refuses other paths)
-- [x] Pairing: 6-digit code (10 min expiry, 5 attempts) → token
+- [x] Pairing: 6-digit code (15 min expiry, 5 attempts, one use) → token
 - [x] FIFO job queue, 1 GPU slot, job folders `jobs/YYYY-MM-DD/<id>_<name>/`
 - [x] POST /run streamed (NDJSON), exit code passthrough
 - [x] POST /delegate (`claude -p … --output-format stream-json` in `worker/`)
@@ -66,13 +66,21 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Real cross-language e2e (`scripts/e2e-real-agent.sh`)
 
 ### Phase 3–4 — App
-- [ ] Wizard framework (what/why/do-it/check/progress/resume)
-- [ ] Windows wizard steps 1–9, Mac wizard steps 1–8
-- [ ] Status, Jobs, Settings, Help (diagram + FAQ + security), Run diagnostics
-- [ ] Tray/menu bar icon green/yellow/red with quick menu
-- [ ] Mac vs PC free RAM side by side (both apps)
-- [ ] Help: "apps open on the Mac still use Mac RAM; only jobs sent to the PC use PC RAM"
-- [ ] Writes Claude Code + Claude Desktop MCP config, CLAUDE.md snippet (preview first)
+- [x] Wizard framework (what/why/do-it/check/progress/resume — step saved after every move)
+- [x] Windows wizard steps 1–9, Mac wizard steps 1–8
+- [x] Status, Jobs, Settings, Help (diagram + FAQ + security), Run diagnostics
+- [x] Tray/menu bar icon green/yellow/red with quick menu (pause, wake, open last output)
+- [x] Mac vs PC free RAM side by side (both apps; Mac reports its RAM to the PC)
+- [x] Help: "apps open on the Mac still use Mac RAM; only jobs sent to the PC use PC RAM"
+- [x] Writes Claude Code + Claude Desktop MCP config, CLAUDE.md snippet (preview first)
+- [x] Windows: winget installs (Tailscale, FFmpeg, Python, Syncthing, Ollama), Claude Code installer, agent venv, WoL adapter + Fast-startup off (one admin prompt), power plan, autostart
+- [x] Per-project opt-in for npm/pnpm/docker explained in Settings
+
+### Phase 5–7 — Ship
+- [ ] `ci.yml`: agent pytest + ruff; Rust tests + clippy (macOS + Windows); UI lint + tests; real-agent e2e; app build on both OSes
+- [ ] `release.yml`: on tag `v*` → `PC Bridge.dmg` (Apple Silicon) + `PC Bridge Setup.exe`
+- [ ] README (assumptions first), `docs/GUIDE.md`, LICENSE
+- [ ] Private repo, push, tag v0.1.0, CI green
 
 ## Decisions log
 - **2026-11-21** One Rust binary serves app + MCP + shims → no Python/Node needed on the Mac.
@@ -80,6 +88,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - **2026-11-21** Scope addition from user: memory-aware routing (RAM-heavy jobs + Mac memory pressure → PC).
 - **2026-11-21** Node/Docker shims are opt-in per project: a `.pcbridge` file in the project with `offload = ["npm","docker"]` — avoids surprising redirection of everyday commands.
 - **2026-11-21** Real-agent e2e found that POSIX agent roots (tests, WSL2 mode) need `/` paths and keep `python3`; fixed in `PathMapper`/`plan`.
+- **2026-11-21** Both apps show Mac vs PC RAM: the Mac posts its memory to the agent on every status poll (window + tray), the PC app reads it from `/status.peer_memory`.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations

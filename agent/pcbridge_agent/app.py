@@ -179,6 +179,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def pair_code():
         return {"code": pairing.ensure_code()}
 
+    peer_memory: dict[str, Any] = {}
+
     @app.get("/status", dependencies=[Depends(auth)])
     async def status():
         running = [queue.jobs[j].summary() for j in queue.running if j in queue.jobs]
@@ -195,7 +197,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "memory": await asyncio.to_thread(memory_info),
             "tools": {t: bool(shutil.which(t)) for t in TOOLS},
             "devices": pairing.devices(),
+            "peer_memory": peer_memory or None,
         }
+
+    @app.post("/peer/memory", dependencies=[Depends(auth)])
+    async def report_peer_memory(body: dict[str, Any]):
+        """The Mac reports its own free RAM so the PC app can show Mac vs PC side by side."""
+        keep = ("total_bytes", "available_bytes", "pressure", "free_percent")
+        peer_memory.clear()
+        peer_memory.update({k: body[k] for k in keep if k in body})
+        peer_memory["ts"] = time.time()
+        return {"ok": True}
 
     @app.get("/gpu", dependencies=[Depends(auth)])
     async def gpu():
@@ -284,8 +296,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if src.is_file():
                 shutil.copy2(src, wdir / src.name)
         job.cwd = wdir
-        job.argv = [claude, "-p", req.task, "--output-format", "stream-json", "--verbose",
-                    *settings.delegate_args]
+        job.argv = [
+            claude,
+            "-p",
+            req.task,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            *settings.delegate_args,
+        ]
         await queue.submit(job)
         return await _finish(job, req.stream)
 
@@ -370,12 +389,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         evicted = warm.touch(req.model)
         try:
             for old in evicted:
-                await asyncio.to_thread(_http_json, "http://127.0.0.1:11434/api/generate",
-                                        {"model": old, "keep_alive": 0}, 30)
+                await asyncio.to_thread(
+                    _http_json, "http://127.0.0.1:11434/api/generate", {"model": old, "keep_alive": 0}, 30
+                )
             return await asyncio.to_thread(
-                _http_json, "http://127.0.0.1:11434/api/chat",
-                {"model": req.model, "messages": req.messages, "options": req.options,
-                 "stream": False, "keep_alive": -1},
+                _http_json,
+                "http://127.0.0.1:11434/api/chat",
+                {
+                    "model": req.model,
+                    "messages": req.messages,
+                    "options": req.options,
+                    "stream": False,
+                    "keep_alive": -1,
+                },
             )
         except (urllib.error.URLError, OSError) as exc:
             raise HTTPException(503, f"Ollama is not running on the PC: {exc}") from exc
@@ -411,4 +437,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise HTTPException(504, "ComfyUI did not finish in time")
 
     return app
-

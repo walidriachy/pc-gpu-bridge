@@ -12,7 +12,12 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_IGNORES = [
-    "node_modules", ".next", ".venv", "__pycache__", "(?d).DS_Store", "*.pcbridge-part",
+    "node_modules",
+    ".next",
+    ".venv",
+    "__pycache__",
+    "(?d).DS_Store",
+    "*.pcbridge-part",
 ]
 
 
@@ -28,8 +33,12 @@ class Syncthing:
 
     def _call(self, method: str, path: str, body=None):
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, method=method,
-                                     headers={"X-API-Key": self.key, "Content-Type": "application/json"})
+        req = urllib.request.Request(
+            self.base + path,
+            data=data,
+            method=method,
+            headers={"X-API-Key": self.key, "Content-Type": "application/json"},
+        )
         try:
             with self._open(req, timeout=10) as r:
                 raw = r.read().decode()
@@ -41,16 +50,32 @@ class Syncthing:
         return self._call("GET", "/rest/system/status")["myID"]
 
     def add_device(self, device_id: str, name: str, address: str = "dynamic") -> None:
-        self._call("PUT", f"/rest/config/devices/{device_id}", {
-            "deviceID": device_id, "name": name, "addresses": [address], "autoAcceptFolders": False,
-        })
+        self._call(
+            "PUT",
+            f"/rest/config/devices/{device_id}",
+            {
+                "deviceID": device_id,
+                "name": name,
+                "addresses": [address],
+                "autoAcceptFolders": False,
+            },
+        )
 
     def share_folder(self, folder_id: str, label: str, path: Path, devices: list[str]) -> None:
         path.mkdir(parents=True, exist_ok=True)
-        self._call("PUT", f"/rest/config/folders/{folder_id}", {
-            "id": folder_id, "label": label, "path": str(path), "type": "sendreceive",
-            "devices": [{"deviceID": d} for d in devices], "fsWatcherEnabled": True, "rescanIntervalS": 60,
-        })
+        self._call(
+            "PUT",
+            f"/rest/config/folders/{folder_id}",
+            {
+                "id": folder_id,
+                "label": label,
+                "path": str(path),
+                "type": "sendreceive",
+                "devices": [{"deviceID": d} for d in devices],
+                "fsWatcherEnabled": True,
+                "rescanIntervalS": 60,
+            },
+        )
         self._call("POST", f"/rest/db/ignores?folder={folder_id}", {"ignore": DEFAULT_IGNORES})
 
 

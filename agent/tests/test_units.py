@@ -233,8 +233,14 @@ def test_syncthing_calls(tmp_path):
             return False
 
     def opener(req, timeout=10):
-        calls.append((req.get_method(), req.full_url, req.headers.get("X-api-key"),
-                      _json.loads(req.data) if req.data else None))
+        calls.append(
+            (
+                req.get_method(),
+                req.full_url,
+                req.headers.get("X-api-key"),
+                _json.loads(req.data) if req.data else None,
+            )
+        )
         if req.full_url.endswith("/rest/system/status"):
             return Resp(b'{"myID": "PC-ID"}')
         return Resp(b"")
