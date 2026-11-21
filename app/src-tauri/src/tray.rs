@@ -206,7 +206,12 @@ pub fn refresh_pause_item(app: &AppHandle, redirect_enabled: bool) {
 }
 
 pub fn show_main(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
+    let w = app.get_webview_window("main").or_else(|| {
+        // Closed earlier (the Mac frees the window's memory): make it again from tauri.conf.json.
+        let conf = app.config().app.windows.iter().find(|w| w.label == "main")?.clone();
+        tauri::WebviewWindowBuilder::from_config(app, &conf).ok()?.build().ok()
+    });
+    if let Some(w) = w {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();

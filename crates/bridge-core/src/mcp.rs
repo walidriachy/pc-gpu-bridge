@@ -114,7 +114,48 @@ fn cwd_arg(args: &Value) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// MCP tool annotations: a title, and hints clients use to decide what needs the user's OK.
+/// (title, read-only, destructive, idempotent)
+fn annotations(name: &str) -> Option<(&'static str, bool, bool, bool)> {
+    Some(match name {
+        "pc_run" => ("Run a heavy command (PC or Mac)", false, false, false),
+        "pc_run_task" => ("Run a command line on the PC", false, true, false),
+        "pc_docker" => ("Docker on the PC", false, true, false),
+        "pc_node_build" => ("JavaScript build on the PC", false, false, false),
+        "pc_delegate_task" => ("Hand a task to Claude on the PC", false, true, false),
+        "pc_status" => ("PC status", true, false, true),
+        "pc_install" => ("Install a program on the PC", false, false, true),
+        "pc_gpu" => ("PC graphics card", true, false, true),
+        "pc_memory" => ("Mac and PC memory", true, false, true),
+        "pc_route_advice" => ("Where would this run?", true, false, true),
+        "pc_push_file" => ("Copy a file to the PC", false, false, true),
+        "pc_pull_file" => ("Copy a file from the PC", false, false, true),
+        "pc_wake" => ("Wake the PC", false, false, true),
+        "comfy_generate" => ("Generate images with ComfyUI on the PC", false, false, false),
+        "ollama_chat" => ("Chat with a local model on the PC", true, false, false),
+        _ => return None,
+    })
+}
+
 fn tool_defs() -> Value {
+    let mut defs = tool_list();
+    for t in defs.as_array_mut().into_iter().flatten() {
+        let name = t["name"].as_str().unwrap_or_default().to_string();
+        if let Some((title, read_only, destructive, idempotent)) = annotations(&name) {
+            t["annotations"] = json!({
+                "title": title,
+                "readOnlyHint": read_only,
+                "destructiveHint": destructive,
+                "idempotentHint": idempotent,
+                // Everything talks to the user's own PC over their private network, nothing else.
+                "openWorldHint": false,
+            });
+        }
+    }
+    defs
+}
+
+fn tool_list() -> Value {
     let cmd = json!({"type": "string", "description": "Command line, e.g. \"ffmpeg -i in.mov -c:v libx264 out.mp4\""});
     let cwd = json!({"type": "string", "description": "Folder on the Mac to run in (must be shared with the PC)"});
     json!([
@@ -292,6 +333,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 }
             }) {
                 Ok(o) => {
+                    engine.notify_finished(cmd, o.duration.unwrap_or(0.0), o.exit_code);
                     let outs: Vec<String> = o
                         .outputs
                         .iter()
@@ -328,6 +370,11 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 }
             }) {
                 Ok(o) => {
+                    engine.notify_finished(
+                        &format!("Claude on the PC: {task}"),
+                        o.duration.unwrap_or(0.0),
+                        o.exit_code,
+                    );
                     let msg = format!(
                         "Worker Claude on the PC finished (exit {}, {:.0}s, {steps} events).\nJob folder on the PC: {}\n\nResult:\n{}",
                         o.exit_code, o.duration.unwrap_or(0.0), o.folder.unwrap_or_default(), o.result_text.unwrap_or_else(|| "(no result text)".into())
@@ -597,6 +644,9 @@ mod tests {
         assert_eq!(init["result"]["serverInfo"]["name"], "pc-bridge");
         assert!(handle(&e, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
         let list = handle(&e, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
+        for t in list["result"]["tools"].as_array().unwrap() {
+            assert!(t["annotations"]["title"].is_string(), "{} has no annotations", t["name"]);
+        }
         let names: Vec<&str> =
             list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         for n in [

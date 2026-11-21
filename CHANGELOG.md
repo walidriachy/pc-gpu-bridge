@@ -13,6 +13,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Every PC tool wakes the PC.** `pc_run_task`, `pc_delegate_task`, `pc_gpu`, file copies, `comfy_generate` and `ollama_chat` now wake a sleeping PC first instead of failing.
 - **The PC stays awake between jobs.** It stays awake 10 minutes after each job, so a follow-up job doesn't have to wake it. `pc_wake` can keep it awake longer (`minutes`, up to 2 hours).
 - **GPU jobs get the whole graphics card.** Before a GPU job starts, the PC unloads Ollama models that are sitting in graphics memory from earlier chats. The job's log says which were unloaded.
+- **A notification when a long PC job finishes.** PC jobs that take a minute or more show a Mac notification when they're done (or failed), so you can look away while they run. Turn it off in Settings → Redirecting.
+- **Updates refresh Claude's setup by themselves.** After PC Bridge updates, it rewrites the parts of Claude's setup you had installed (routing rules in CLAUDE.md, helper commands), so new rules and tools arrive without running setup again. The status screen shows **Updated to …** with a **See what's new** button.
+- **"Start a new Claude session" reminder.** Claude sessions opened before PC Bridge's setup changed keep the old setup. The status screen now says how many are still open, and that Claude Desktop needs a quit and reopen.
+- **PC and Mac stay on the same version.** Both apps now check for updates every hour (was every 6 hours), and the Mac's status screen says when the PC is on a different version.
+- **Less Mac memory while the window is closed.** Closing the window now really closes it (PC Bridge keeps running in the menu bar) instead of keeping it hidden, which frees about 100 MB. It reopens from the menu bar as before.
+- **Claude knows which tools only read.** Every PC Bridge tool now carries MCP hints (a title, whether it only reads, whether it can change or delete files), so Claude apps can ask before the ones that change things.
 
 ## [0.1.4] — 2026-11-21
 

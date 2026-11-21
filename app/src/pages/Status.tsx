@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errText, type Platform } from "../lib/api";
 import { duration } from "../lib/format";
 import { Card, Dot, MemoryCompare } from "../components/ui";
@@ -54,8 +55,57 @@ function RunningCard({ pc }: { pc: any }) {
   );
 }
 
+function WhatsNewCard() {
+  const [n, setN] = useState<Awaited<ReturnType<typeof api.whatsNew>>>(null);
+  useEffect(() => {
+    api.whatsNew().then(setN).catch(() => setN(null));
+  }, []);
+  if (!n) return null;
+  const close = () => api.dismissWhatsNew().finally(() => setN(null));
+  return (
+    <Card title={`Updated to ${n.version}`} actions={<button className="btn small ghost" onClick={close}>Got it</button>}>
+      <p>
+        PC Bridge updated itself{n.previous ? ` from ${n.previous}` : ""}.{" "}
+        {n.refreshed.length > 0 ? `Claude's setup was refreshed too (${n.refreshed.join(", ")}).` : ""}
+      </p>
+      <p><button className="btn small" onClick={() => openUrl(n.notes_url)}>See what's new</button></p>
+    </Card>
+  );
+}
+
+function OpenSessionsCard() {
+  const [s] = usePoll(() => api.staleClaudeSessions(), 30000);
+  if (!s || (s.code === 0 && !s.desktop)) return null;
+  const parts = [
+    s.code > 0 ? `${s.code} Claude Code session${s.code === 1 ? " was" : "s were"}` : "",
+    s.desktop ? `Claude Desktop was` : "",
+  ].filter(Boolean);
+  return (
+    <Card title="Start a new Claude session">
+      <p>
+        {parts.join(" and ")} already open before PC Bridge's Claude setup changed. They keep the old setup and
+        won't see PC Bridge's newest tools until you start a new session{s.desktop ? " (Claude Desktop: quit it and open it again)" : ""}.
+      </p>
+    </Card>
+  );
+}
+
+function VersionNote({ pcVersion, macVersion }: { pcVersion?: string; macVersion: string }) {
+  if (!pcVersion || !macVersion || pcVersion === macVersion) return null;
+  return (
+    <p className="muted small">
+      The PC has PC Bridge {pcVersion}, this Mac {macVersion}. Each one updates itself: it checks every hour and waits
+      until no job is running. To update the PC now, open PC Bridge there → Settings → Check for updates now.
+    </p>
+  );
+}
+
 function MacStatus() {
   const [s] = usePoll(() => api.statusSnapshot(), 5000);
+  const [macVersion, setMacVersion] = useState("");
+  useEffect(() => {
+    api.appInfo().then((i) => setMacVersion(i.version)).catch(() => {});
+  }, []);
   const [msg, setMsg] = useState("");
   if (!s) return <p className="muted">Checking your PC…</p>;
   const refused = s.error_kind === "unauthorized";
@@ -83,7 +133,10 @@ function MacStatus() {
           <button className="btn small" onClick={() => api.wakePc().then(setMsg).catch((e) => setMsg(errText(e)))}>Wake PC</button>
         )}
         {msg && <p className="muted small">{msg}</p>}
+        {s.reachable && <VersionNote pcVersion={s.pc?.version} macVersion={macVersion} />}
       </Card>
+      <WhatsNewCard />
+      <OpenSessionsCard />
       <Card title="Memory: Mac vs PC">
         <MemoryCompare mac={s.mac_memory} pc={s.pc?.memory} pressure={s.mac_memory?.pressure} />
       </Card>

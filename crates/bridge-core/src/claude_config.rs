@@ -109,6 +109,29 @@ pub fn repair_translocated(home: &Path, bin_dir: &Path, binary: &str, tools: &[&
     Ok(fixed)
 }
 
+/// After an update: rewrite only the parts of the Claude setup that are already installed, so new
+/// routing rules and helper commands reach the user without running setup again.
+pub fn refresh_installed(home: &Path, bin_dir: &Path, binary: &str, tools: &[&str]) -> Result<Vec<String>, String> {
+    let mut done = vec![];
+    for (config, who) in [(claude_code_config(home), "Claude Code"), (claude_desktop_config(home), "Claude Desktop")] {
+        if mcp_installed(&config) {
+            install_mcp(&config, binary)?;
+            done.push(format!("{who} connection"));
+        }
+    }
+    let md = claude_md(home);
+    let text = std::fs::read_to_string(&md).unwrap_or_default();
+    if text.contains(BEGIN) && !text.contains(CLAUDE_MD_SNIPPET.trim()) {
+        install_claude_md(&md)?;
+        done.push("routing rules in CLAUDE.md".into());
+    }
+    if bin_dir.join("pc-bridge").exists() {
+        install_shims(bin_dir, binary, tools)?;
+        done.push("helper commands".into());
+    }
+    Ok(done)
+}
+
 /// Replace (or append) the text between `begin` and `end` markers.
 pub fn upsert_block(existing: &str, begin: &str, end: &str, body: &str) -> String {
     let block = format!("{begin}\n{}\n{end}", body.trim_end());
@@ -310,5 +333,27 @@ mod tests {
         assert_eq!(z.matches(PATH_BEGIN).count(), 1);
         uninstall_path(d.path());
         assert!(!std::fs::read_to_string(d.path().join(".zshrc")).unwrap().contains("PC Bridge"));
+    }
+
+    #[test]
+    fn refresh_touches_only_what_was_installed() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".pcbridge/bin");
+        // Nothing installed: nothing refreshed, nothing created.
+        assert!(refresh_installed(home.path(), &bin, "/A/pc-bridge", &["ffmpeg"]).unwrap().is_empty());
+        assert!(!claude_md(home.path()).exists() && !bin.exists());
+        // An old CLAUDE.md block and old shims get the current text.
+        let md = claude_md(home.path());
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(&md, format!("mine\n{BEGIN}\nold rules\n{END}\n")).unwrap();
+        install_shims(&bin, "/Old/pc-bridge", &["ffmpeg"]).unwrap();
+        let done = refresh_installed(home.path(), &bin, "/A/pc-bridge", &["ffmpeg"]).unwrap();
+        assert_eq!(done, vec!["routing rules in CLAUDE.md".to_string(), "helper commands".into()]);
+        let text = std::fs::read_to_string(&md).unwrap();
+        assert!(text.starts_with("mine\n") && text.contains(CLAUDE_MD_SNIPPET.trim()) && !text.contains("old rules"));
+        assert!(std::fs::read_to_string(bin.join("ffmpeg")).unwrap().contains("/A/pc-bridge"));
+        // Already current: CLAUDE.md is left alone.
+        let again = refresh_installed(home.path(), &bin, "/A/pc-bridge", &["ffmpeg"]).unwrap();
+        assert_eq!(again, vec!["helper commands".to_string()]);
     }
 }

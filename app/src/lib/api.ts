@@ -18,6 +18,8 @@ export interface BridgeConfig {
   measured_mbps: number;
   sync_wait_secs: number;
   notify_on_fallback: boolean;
+  notify_on_finish: boolean;
+  seen_version: string;
   setup_complete: boolean;
   wizard_step: number;
   syncthing_api_key: string;
@@ -94,6 +96,10 @@ export const api = {
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   wakePc: () => invoke<string>("wake_pc"),
   diagnosticsMac: () => invoke<Check[]>("run_diagnostics_mac"),
+  whatsNew: () =>
+    invoke<{ version: string; previous: string; refreshed: string[]; notes_url: string } | null>("whats_new"),
+  dismissWhatsNew: () => invoke<void>("dismiss_whats_new"),
+  staleClaudeSessions: () => invoke<{ code: number; desktop: boolean }>("stale_claude_sessions"),
   // Windows
   winGetState: () => invoke<WinState>("win_get_state"),
   winSaveState: (state: WinState) => invoke<void>("win_save_state", { state }),

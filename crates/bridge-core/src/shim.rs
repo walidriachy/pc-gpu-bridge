@@ -59,6 +59,9 @@ impl ShimIo for Capture {
 /// Runs a command on the Mac. Injected so tests don't spawn real tools.
 pub type LocalRunner = fn(tool: &str, args: &[String], cwd: &Path) -> i32;
 
+/// PC jobs at least this long show a "finished" notification on the Mac.
+pub const FINISH_NOTICE_SECS: f64 = 60.0;
+
 pub struct Engine {
     pub cfg: BridgeConfig,
     pub client: Option<AgentClient>,
@@ -314,6 +317,27 @@ impl Engine {
         PathMapper::new(self.cfg.shared_folders.clone(), self.cfg.pc_root.clone())
     }
 
+    /// A Mac notification when a long PC job ends, so the user can look away while it runs.
+    pub fn notify_finished(&self, what: &str, seconds: f64, exit_code: i32) {
+        if !self.cfg.notify_on_finish || seconds < FINISH_NOTICE_SECS {
+            return;
+        }
+        let what: String = what.chars().take(60).collect();
+        let took = if seconds >= 3600.0 {
+            format!("{:.0} h {:.0} min", (seconds / 3600.0).floor(), (seconds % 3600.0) / 60.0)
+        } else if seconds >= 60.0 {
+            format!("{:.0} min {:.0} s", (seconds / 60.0).floor(), seconds % 60.0)
+        } else {
+            format!("{seconds:.0} s")
+        };
+        let (title, body) = if exit_code == 0 {
+            ("PC job finished", format!("{what} — done in {took}"))
+        } else {
+            ("PC job failed", format!("{what} — stopped with code {exit_code} after {took}"))
+        };
+        crate::notify::send(title, &body);
+    }
+
     /// Whether this Mac can send Wake-on-LAN to the PC.
     pub fn can_wake(&self) -> bool {
         !self.cfg.pc_mac_address.is_empty() && !self.wake_timeout.is_zero()
@@ -511,6 +535,7 @@ impl Engine {
                 } else {
                     decision.reason.clone()
                 };
+                self.notify_finished(&format!("{tool} {}", args.join(" ")), r.seconds, r.exit_code);
                 r.decision = Some(decision);
                 if let Some(h) = &self.history {
                     let name = format!("{tool} {}", args.join(" "));

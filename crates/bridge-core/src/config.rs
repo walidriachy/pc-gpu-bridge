@@ -31,6 +31,10 @@ pub struct BridgeConfig {
     /// Seconds to wait for outputs to appear via Syncthing before pulling directly.
     pub sync_wait_secs: u64,
     pub notify_on_fallback: bool,
+    /// Show a Mac notification when a PC job that took a while (a minute or more) finishes.
+    pub notify_on_finish: bool,
+    /// The app version whose "What's new" the user has seen (empty on a fresh install).
+    pub seen_version: String,
     pub setup_complete: bool,
     pub wizard_step: u32,
     /// API key for PC Bridge's private Syncthing instance on this Mac.
@@ -52,6 +56,8 @@ impl Default for BridgeConfig {
             measured_mbps: 300.0,
             sync_wait_secs: 3,
             notify_on_fallback: true,
+            notify_on_finish: true,
+            seen_version: String::new(),
             setup_complete: false,
             wizard_step: 0,
             syncthing_api_key: String::new(),

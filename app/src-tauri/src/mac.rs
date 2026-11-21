@@ -12,8 +12,16 @@ use bridge_core::shim::{Capture, Engine};
 use bridge_core::{detect, secrets, syncthing};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 use tauri::State;
+
+/// Set when this app run refreshed or installed Claude's setup; `None` otherwise.
+static WHATS_NEW: Mutex<Option<Value>> = Mutex::new(None);
+/// When Claude's setup last changed during this app run: sessions opened before it are stale.
+static CLAUDE_SETUP_AT: Mutex<Option<SystemTime>> = Mutex::new(None);
+
+const RELEASES: &str = "https://github.com/walidriachy/pc-gpu-bridge/releases/tag";
 
 fn client(cfg: &BridgeConfig) -> Option<AgentClient> {
     cfg.is_paired().then(|| AgentClient::new(cfg.base_url(), secrets::get_token()))
@@ -538,7 +546,102 @@ pub fn claude_install(include_claude_md: bool, include_shims: bool) -> Result<Ve
         cc::install_path(&home, &bin_dir)?;
         done.push(format!("Installed {} helper commands", detect::SHIM_TOOLS.len()));
     }
+    *CLAUDE_SETUP_AT.lock().unwrap() = Some(SystemTime::now());
     Ok(done)
+}
+
+// ---------------------------------------------------------------- after an update
+
+/// First start of a new version: refresh the parts of Claude's setup that are installed (new
+/// routing rules, helper commands) and remember to show "What's new". Release builds running from
+/// Applications only, so a development build never points Claude at itself.
+pub fn after_update() {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut cfg = BridgeConfig::load();
+    if cfg.seen_version == version {
+        return;
+    }
+    if !cfg.setup_complete {
+        cfg.seen_version = version.into(); // a fresh install: nothing new to tell
+        let _ = cfg.save();
+        return;
+    }
+    let exe = exe_path();
+    let refreshed = if cfg!(debug_assertions) || !exe.starts_with("/Applications/") {
+        vec![]
+    } else {
+        cc::refresh_installed(&user_home(), &home_dir().join("bin"), &exe, detect::SHIM_TOOLS).unwrap_or_default()
+    };
+    *CLAUDE_SETUP_AT.lock().unwrap() = Some(SystemTime::now());
+    *WHATS_NEW.lock().unwrap() = Some(json!({
+        "version": version,
+        "previous": cfg.seen_version,
+        "refreshed": refreshed,
+        "notes_url": format!("{RELEASES}/v{version}"),
+    }));
+}
+
+#[tauri::command]
+pub fn whats_new() -> Value {
+    WHATS_NEW.lock().unwrap().clone().unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+pub fn dismiss_whats_new() -> Result<(), String> {
+    let mut cfg = BridgeConfig::load();
+    cfg.seen_version = env!("CARGO_PKG_VERSION").into();
+    *WHATS_NEW.lock().unwrap() = None;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// `ps` elapsed time (`[[dd-]hh:]mm:ss`) in seconds.
+pub fn parse_etime(s: &str) -> Option<u64> {
+    let (days, rest) = match s.trim().split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, s.trim()),
+    };
+    let parts: Vec<u64> = rest.split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let secs = match parts.as_slice() {
+        [m, s] => m * 60 + s,
+        [h, m, s] => h * 3600 + m * 60 + s,
+        _ => return None,
+    };
+    Some(days * 86400 + secs)
+}
+
+/// From `ps -axo etime=,comm=` output: Claude Code sessions and whether Claude Desktop is open,
+/// counting only those running longer than `older_than` seconds.
+pub fn count_claude_sessions(ps: &str, older_than: u64) -> (usize, bool) {
+    let mut code = 0;
+    let mut desktop = false;
+    for line in ps.lines() {
+        let line = line.trim_start();
+        let Some((etime, comm)) = line.split_once(char::is_whitespace) else { continue };
+        let Some(age) = parse_etime(etime) else { continue };
+        if age <= older_than {
+            continue;
+        }
+        let comm = comm.trim();
+        if comm.ends_with("/claude") || comm == "claude" {
+            code += 1;
+        } else if comm.ends_with("/Claude.app/Contents/MacOS/Claude") {
+            desktop = true;
+        }
+    }
+    (code, desktop)
+}
+
+/// Claude sessions opened before Claude's setup changed in this app run: they don't see the new
+/// PC Bridge tools or rules until a new session starts.
+#[tauri::command]
+pub fn stale_claude_sessions() -> Value {
+    let Some(at) = *CLAUDE_SETUP_AT.lock().unwrap() else {
+        return json!({"code": 0, "desktop": false});
+    };
+    let since = SystemTime::now().duration_since(at).map(|d| d.as_secs()).unwrap_or(0);
+    let out = run("/bin/ps", &["-axo", "etime=,comm="]);
+    let (code, desktop) = count_claude_sessions(&out.stdout, since);
+    json!({"code": code, "desktop": desktop})
 }
 
 #[tauri::command]
@@ -806,6 +909,21 @@ pub async fn run_diagnostics_mac() -> Result<Vec<Value>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_claude_sessions_older_than_the_setup() {
+        assert_eq!(parse_etime("05:07"), Some(307));
+        assert_eq!(parse_etime("09:17:40"), Some(9 * 3600 + 17 * 60 + 40));
+        assert_eq!(parse_etime("2-01:00:00"), Some(2 * 86400 + 3600));
+        assert_eq!(parse_etime("x"), None);
+        let ps = "09:17:54 /Applications/Claude.app/Contents/MacOS/Claude\n\
+                  09:17:40 /Users/me/Library/Application Support/Claude/claude-code/2.1/x/claude.app/Contents/MacOS/claude\n\
+                  00:30 /Users/me/.local/bin/claude\n\
+                  01:00:00 /Applications/Claude.app/Contents/Frameworks/Claude\n";
+        assert_eq!(count_claude_sessions(ps, 60), (1, true));
+        assert_eq!(count_claude_sessions(ps, 10), (2, true));
+        assert_eq!(count_claude_sessions(ps, 99_999), (0, false));
+    }
 
     #[test]
     fn keeps_tailscale_connected_but_never_signs_in() {

@@ -1,5 +1,6 @@
 //! Automatic updates. The app checks GitHub releases for a newer signed version (`latest.json`)
-//! a couple of minutes after start and then every 6 hours, installs it and restarts itself.
+//! a couple of minutes after start and then every hour, installs it (once no PC job is running) and
+//! restarts itself.
 //! Every update is signed with the project's key; unsigned or tampered downloads are refused.
 
 use serde_json::{json, Value};
@@ -8,7 +9,7 @@ use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
 const FIRST_CHECK: Duration = Duration::from_secs(120);
-const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const EVERY: Duration = Duration::from_secs(60 * 60);
 /// After downloading, how long to wait for the PC's jobs to finish before giving up until next time.
 const MAX_IDLE_WAIT: Duration = Duration::from_secs(3 * 60 * 60);
 const IDLE_POLL: Duration = Duration::from_secs(20);

@@ -75,7 +75,11 @@ fn run_gui(minimized: bool) {
             updates::spawn_auto_update(app.handle().clone());
             if minimized {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
+                    if cfg!(target_os = "macos") {
+                        let _ = w.destroy(); // made when first opened from the menu bar
+                    } else {
+                        let _ = w.hide();
+                    }
                 }
             }
             if cfg!(windows) {
@@ -93,6 +97,7 @@ fn run_gui(minimized: bool) {
                     }
                 });
                 std::thread::spawn(mac::claim_device_once);
+                mac::after_update();
                 // Keep Tailscale open and connected once this Mac is paired.
                 std::thread::spawn(|| loop {
                     if !BridgeConfig::load().pc_host.is_empty() {
@@ -104,10 +109,13 @@ fn run_gui(minimized: bool) {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps PC Bridge running in the menu bar / tray.
+            // Closing the window keeps PC Bridge running in the menu bar / tray. On the Mac the
+            // window is really closed (its web view uses 100+ MB) and made again when reopened.
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                if !cfg!(target_os = "macos") {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -129,6 +137,9 @@ fn run_gui(minimized: bool) {
             mac::cancel_job,
             mac::wake_pc,
             mac::run_diagnostics_mac,
+            mac::whats_new,
+            mac::dismiss_whats_new,
+            mac::stale_claude_sessions,
             win::win_get_state,
             win::win_save_state,
             win::win_restart_helper,
@@ -156,6 +167,10 @@ fn run_gui(minimized: bool) {
         .expect("error while building PC Bridge");
 
     app.run(|handle, event| {
+        // The last window closing must not quit the app: it lives on in the menu bar.
+        if let RunEvent::ExitRequested { api, code: None, .. } = &event {
+            api.prevent_exit();
+        }
         if let RunEvent::Exit = event {
             if let Some(s) = handle.try_state::<state::AppState>() {
                 s.procs.lock().unwrap().kill_all();

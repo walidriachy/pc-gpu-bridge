@@ -58,6 +58,10 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
           <input type="checkbox" checked={cfg.notify_on_fallback} onChange={(e) => save({ ...cfg, notify_on_fallback: e.target.checked })} />
           <span>Notify me when a job had to run on the Mac instead</span>
         </label>
+        <label className="switch">
+          <input type="checkbox" checked={cfg.notify_on_finish} onChange={(e) => save({ ...cfg, notify_on_finish: e.target.checked })} />
+          <span>Notify me when a PC job that took a minute or more finishes</span>
+        </label>
       </Card>
       <Card title="Paired PC">
         <p>{cfg.pc_hostname || cfg.pc_host || "Not paired"} {cfg.pc_host && <span className="muted">({cfg.pc_host})</span>}</p>
