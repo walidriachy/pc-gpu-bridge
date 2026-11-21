@@ -197,6 +197,7 @@ timeline
   title PC Bridge roadmap
   v0.1 : Both apps + wizards : Smart, memory-aware router : CI + installers : Signed auto-updates (0.1.2)
   v0.1.3 : One-click install of missing programs (15 MCP tools) : Faster jobs on big shared folders : PyTorch in the wizard : Mac "damaged" fix
+  v0.1.4 : Router learns from both machines : No more Keychain prompt : One pairing per Mac : Safer file sync
   v0.2 : Live job progress in the menu bar : Signed and notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake via Tailscale relay when away from home
 ```

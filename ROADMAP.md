@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — **v0.1.3 released** (missing-program installs, targeted output detection, Mac signing fix); CI green on Linux, macOS and Windows_
+_Last updated: 2026-11-21 — **v0.1.4 released** (router learns from both machines, ComfyUI in the GPU queue, seven bug fixes: no more Keychain prompt, clean pairing, safer sync); CI green on Linux, macOS and Windows_
 
 ## Architecture in one picture
 
@@ -37,6 +37,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 7 | GitHub repo, first release, CI green | ✅ | Public repo, v0.1.0 release with `PC Bridge.dmg` + `PC Bridge Setup.exe` |
 | 8 | **v0.1.2 hardening from the first real run**: signed auto-updates, self-updating PC helper, fresh PATH for jobs, helper starts without Finish, Tailscale kept connected | ✅ | Found by the first real Windows + Mac run |
 | 9 | **v0.1.3**: missing programs (catalog, hints, `pc_install`, Settings → Programs), PyTorch in the wizard, targeted output detection, ad-hoc Mac signing + App Translocation self-heal | ✅ | Released and confirmed on the real Mac and PC: signed Mac app opens normally, PC self-updated 0.1.2 → 0.1.3, a GPU job finished in 3.2 s (was 30–60 s). Still to try: a real install from Settings → Programs (winget codes, Windows "Yes" prompt, Blender folder) |
+| 10 | **v0.1.4**: learning router (both machines, compute time only, job signatures), ComfyUI in the GPU slot, token file instead of Keychain, refused-key message, one pairing per Mac, Ctrl-C cancels PC jobs, process-tree cancel, quoting fixes, updates wait for idle, Jobs list survives restarts, safer sync | ✅ | |
 
 ## Detailed checklist
 
@@ -111,13 +112,27 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Docs: USAGE, ARCHITECTURE, GUIDE, SECURITY, CHANGELOG (Unreleased)
 - [ ] Try on a real PC and Mac before tagging: winget exit codes, Blender's install folder, the Windows "Yes" prompt, the signed `.dmg` on macOS 15
 
+### Phase 10 — v0.1.4
+- [x] Router learning: Mac and PC runs recorded, PC compute time kept apart from queue and transfer, job signatures, recency-weighted median, legacy rows ignored
+- [x] ComfyUI jobs hold the single GPU slot for their whole run; a missed answer no longer frees it early
+- [x] Pairing key in `~/.pcbridge/token` (0600), moved from the Keychain on first read
+- [x] Refused key reported at once (no Wake-on-LAN, red status in the menu bar and window)
+- [x] One pairing entry per Mac (`device_id`), `/pair/claim`, `/pair/forget`, Settings → Pairing → paired Macs with **Remove**
+- [x] Ctrl-C in a helper command cancels the PC job; cancel stops the whole process tree (Windows `taskkill /T`, POSIX process group)
+- [x] Shim fixes: PowerShell/cmd code kept, Mac paths with spaces quoted once, numbers and sentences never treated as paths, new output files in unshared folders refused clearly; Windows `/switches` allowed
+- [x] Updates wait for running and queued jobs, also when a job starts during the download
+- [x] Jobs list reloads the last 7 days at start; unfinished jobs show as interrupted
+- [x] Safer sync: atomic push, 14-day trashcan versioning, `.git`/`.claude` ignored, 2 s watcher delay, settings re-applied at Mac start
+- [ ] Try on the real PC and Mac: Ctrl-C cancel, the pairing claim, the Keychain-to-file move
+
 ## What's next (after v0.1)
 
 ```mermaid
 timeline
   title PC Bridge roadmap
   v0.1 : Both apps + wizards : Smart, memory-aware router : CI + installers : Signed auto-updates (0.1.2)
-  v0.1.3 — now : Missing programs - one-click install (15 MCP tools) : Faster jobs on big shared folders : PyTorch in the wizard : Mac "damaged" fix
+  v0.1.3 : Missing programs - one-click install (15 MCP tools) : Faster jobs on big shared folders : PyTorch in the wizard : Mac "damaged" fix
+  v0.1.4 — now : Router learns from both machines : No more Keychain prompt : One pairing per Mac : Safer file sync
   v0.2 : Live job progress in the menu bar : Signed + notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake from away via an always-on tailnet device
 ```
@@ -152,6 +167,7 @@ timeline
 - **2026-11-21** (v0.1.3) Snapshot targeting: output detection looks only in the job's folder (2 levels) and folders named by its arguments inside the root, with a 5 s budget, instead of walking the whole shared folder (20–45 s per job on big folders). Accepted trade-off: files written elsewhere aren't job outputs or cached, but still reach the Mac through Syncthing if they're in a shared folder.
 - **2026-11-21** (v0.1.3) Mac Gatekeeper: 0.1.2 shipped with only the linker's signature, so macOS 15 called it "damaged" and App Translocation ran it from a read-only copy that couldn't update. Fix: ad-hoc signing in the bundler (no paid certificate yet; hardened runtime off because it's only for notarization), a release check with `codesign`, and a self-heal at start that removes the quarantine mark from `/Applications/PC Bridge.app` only (the user has already opened it) and relaunches from there. Found by the first real Mac install of 0.1.2.
 - **2026-11-21** (after v0.1.3) The router learns from both machines: Mac runs are recorded too, PC rows store the agent's compute time with queue and transfer kept apart, and each row has a job signature (`python:train.py`, `ffmpeg:libx264`…). The Mac and PC rates are only compared at the same level (same signature, or tool-wide over shared signatures), and sizes are counted as at least 1 MB in both learning and estimating. Review found that mixing levels and clamping sizes differently (0.001 MB vs 1 MB) sent 3-second jobs on a wake-and-queue round trip. Agents before 0.1.4 can't say what was compute, so their rows are approximate. ComfyUI jobs now take the single GPU slot like every other GPU job; Ollama doesn't (a chat would wait behind an hour-long render, and Ollama fits models in free VRAM by itself). A missed ComfyUI answer no longer frees the slot while the prompt still runs.
+- **2026-11-21** (v0.1.4) Mac pairing key moved from the Keychain to a 0600 file: ad-hoc signing gives each build a new identity, so the Keychain asked for the Mac password after every update and blocked MCP calls until answered. Same protection model as the PC's copy (only the user can read it). Syncthing gets trashcan versioning (14 days) and ignores `.git`/`.claude` so a mistaken overwrite is recoverable and repositories are never written by two computers at once.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations

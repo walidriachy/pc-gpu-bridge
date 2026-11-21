@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-11-21
+
 ### Changed
 - **The router now really learns from both machines.** Every time a heavy job runs, PC Bridge writes down how long it took, on the Mac or on the PC, and uses that to choose next time. Before, it only remembered PC jobs, and it counted the whole trip there and back (sending files, waiting in line, bringing results back) as if it were the PC's work, so the PC looked slower than it is. Now it keeps the PC's real working time apart from the waiting and the file transfers, and adds those once.
 - It tells jobs apart: `python train.py` and `python tiny.py` are learned separately, as are different ffmpeg codecs, Blender scripts, npm scripts and Ollama models. The Mac's and the PC's numbers are only compared when they come from the same kind of job, and recent runs count more than old ones.
@@ -90,7 +92,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.0...v0.1.1
