@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — Phases 1–4 complete (agent 30 tests, core 44 tests incl. real Rust↔Python e2e, UI 6 tests; clippy/eslint/ruff clean); Phase 5 (CI + release) next_
+_Last updated: 2026-11-21 — Phases 1–6 complete (agent 30 tests, core 44 tests incl. real Rust↔Python e2e, UI 6 tests; clippy/eslint/ruff clean); CI written; Phase 7 (repo + first release) in progress_
 
 ## Architecture in one picture
 
@@ -33,8 +33,8 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | ✅ | React + TS, light/dark |
 | 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ✅ | Windows paths verified in CI build only (no Windows box here) |
 | 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | 🔄 | |
-| 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ⏳ | |
-| 7 | GitHub repo, first release, CI green | ⏳ | |
+| 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ✅ | |
+| 7 | GitHub repo, first release, CI green | 🔄 | |
 
 ## Detailed checklist
 
@@ -77,9 +77,9 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Per-project opt-in for npm/pnpm/docker explained in Settings
 
 ### Phase 5–7 — Ship
-- [ ] `ci.yml`: agent pytest + ruff; Rust tests + clippy (macOS + Windows); UI lint + tests; real-agent e2e; app build on both OSes
-- [ ] `release.yml`: on tag `v*` → `PC Bridge.dmg` (Apple Silicon) + `PC Bridge Setup.exe`
-- [ ] README (assumptions first), `docs/GUIDE.md`, LICENSE
+- [x] `ci.yml`: agent pytest + ruff (Linux + Windows); Rust fmt + clippy + tests (macOS + Windows); UI lint + tests; real-agent e2e; installer build on both OSes
+- [x] `release.yml`: on tag `v*` → `PC Bridge.dmg` (Apple Silicon) + `PC Bridge Setup.exe`
+- [x] README (assumptions first), `docs/GUIDE.md` (mirrors both wizards, unsigned-app steps, troubleshooting), LICENSE (MIT)
 - [ ] Private repo, push, tag v0.1.0, CI green
 
 ## Decisions log
@@ -95,3 +95,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - Files a job opens **without naming them on the command line** (e.g. a script reading `data.csv` internally) reach the PC only through Syncthing; files named in the command are pushed automatically if missing.
 - Wake-on-LAN works only when the Mac is on the same home network as the PC (Tailscale can't carry the wake signal).
 - Node/Docker offload needs the project's dependencies installed on the PC side (Windows `node_modules` are not synced from the Mac).
+- The apps are **not code-signed**: macOS Gatekeeper and Windows SmartScreen warn on first open (one-time bypass in `docs/GUIDE.md`).
+- GitHub stores release files with spaces as dots, so the downloads are named `PC.Bridge.dmg` / `PC.Bridge.Setup.exe` (the release page label shows the readable name).
+- The Windows side (winget installs, WoL adapter script, power plan, tray) is compiled and built in CI but was not run on a real Windows PC during development.
+- Only an Apple Silicon DMG is produced (no Intel Mac build).

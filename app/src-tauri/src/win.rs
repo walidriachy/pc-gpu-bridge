@@ -61,7 +61,8 @@ fn root() -> PathBuf {
 fn update_agent_settings(patch: Value) -> Result<(), String> {
     let p = root().join("config").join("settings.json");
     std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-    let mut v: Value = std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
+    let mut v: Value =
+        std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
     if let (Some(obj), Some(add)) = (v.as_object_mut(), patch.as_object()) {
         for (k, val) in add {
             obj.insert(k.clone(), val.clone());
@@ -294,7 +295,8 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
 pub fn start_services(state: &AppState) -> Result<(), String> {
     let ws = load_state();
     let mut procs = state.procs.lock().unwrap();
-    let alive = |c: &mut Option<std::process::Child>| c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
+    let alive =
+        |c: &mut Option<std::process::Child>| c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
     if !alive(&mut procs.agent) && venv_python().exists() {
         let child = command(&venv_python().display().to_string())
             .args(["-m", "pcbridge_agent", "--root", &ws.root])
@@ -458,18 +460,44 @@ pub async fn run_diagnostics_win(app: tauri::AppHandle) -> Result<Vec<Value>, St
         let ws = load_state();
         let mut out = vec![];
         let smi = run("nvidia-smi", &["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"]);
-        out.push(check("NVIDIA graphics card", smi.ok(), smi.stdout.trim().to_string(), "Install the latest NVIDIA driver (Setup → step 2)."));
+        out.push(check(
+            "NVIDIA graphics card",
+            smi.ok(),
+            smi.stdout.trim().to_string(),
+            "Install the latest NVIDIA driver (Setup → step 2).",
+        ));
         let ts = tailscale_status();
-        out.push(check("Tailscale connected", ts["running"] == true, "", "Open Tailscale from the Start menu and log in with the same account as your Mac."));
-        for (id, label) in [("ffmpeg", "FFmpeg"), ("python", "Python"), ("syncthing", "Syncthing"), ("claude", "Claude Code")] {
+        out.push(check(
+            "Tailscale connected",
+            ts["running"] == true,
+            "",
+            "Open Tailscale from the Start menu and log in with the same account as your Mac.",
+        ));
+        for (id, label) in
+            [("ffmpeg", "FFmpeg"), ("python", "Python"), ("syncthing", "Syncthing"), ("claude", "Claude Code")]
+        {
             let (ok, detail) = tool_present(id);
             out.push(check(label, ok, detail, "Open Setup and run the install step again."));
         }
         let agent = local_client().and_then(|c| c.status().ok());
-        out.push(check("PC Bridge agent running", agent.is_some(), ws.root.clone(), "Restart PC Bridge. If it still fails, open PCBridge\\logs\\agent.log."));
-        out.push(check("Folder syncing running", bridge_core::syncthing::Syncthing::new(ws.syncthing_api_key.clone()).alive(), "",
-            "Restart PC Bridge; make sure Syncthing is installed (Setup → install step)."));
-        out.push(check("Wake-on-LAN set up", !ws.mac_address.is_empty(), ws.mac_address.clone(), "Setup → Wake-on-LAN → “Do it for me”."));
+        out.push(check(
+            "PC Bridge agent running",
+            agent.is_some(),
+            ws.root.clone(),
+            "Restart PC Bridge. If it still fails, open PCBridge\\logs\\agent.log.",
+        ));
+        out.push(check(
+            "Folder syncing running",
+            bridge_core::syncthing::Syncthing::new(ws.syncthing_api_key.clone()).alive(),
+            "",
+            "Restart PC Bridge; make sure Syncthing is installed (Setup → install step).",
+        ));
+        out.push(check(
+            "Wake-on-LAN set up",
+            !ws.mac_address.is_empty(),
+            ws.mac_address.clone(),
+            "Setup → Wake-on-LAN → “Do it for me”.",
+        ));
         out.push(check("Starts with Windows", autostart, "", "Settings → turn on “Start with Windows”."));
         Ok(out)
     })
