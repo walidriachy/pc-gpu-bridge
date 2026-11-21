@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-11-21
+
 ### Changed
 - **`pc_run` now lets the smart router choose** (it used to always send to the PC). It weighs past run times, file sizes, free memory on both computers, the PC's queue and whether the PC is asleep, then says where it ran and why. Use `mode: "pc"` to always use the PC. Commands Claude explicitly sends with `npm`, `docker` and the like still go to the PC.
 - **A sleeping PC is only woken when it's worth it.** The router now decides before sending Wake-on-LAN: a small job that's quicker on the Mac runs there and the PC stays asleep.
@@ -108,7 +110,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.1...v0.1.2

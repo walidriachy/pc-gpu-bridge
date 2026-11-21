@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ctrlc",
  "dirs 5.0.1",
@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "pc-bridge"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bridge-core",
  "rand 0.8.8",

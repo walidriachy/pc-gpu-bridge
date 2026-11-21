@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — **v0.1.4 released** (router learns from both machines, ComfyUI in the GPU queue, seven bug fixes: no more Keychain prompt, clean pairing, safer sync); CI green on Linux, macOS and Windows_
+_Last updated: 2026-11-21 — **v0.1.5 released** (smarter routing: decide before waking, real queue estimate, memory guard; easier: finish notifications, setup refresh after updates, hourly updates); v0.2 planned; CI green on Linux, macOS and Windows_
 
 ## Architecture in one picture
 
@@ -38,6 +38,8 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 8 | **v0.1.2 hardening from the first real run**: signed auto-updates, self-updating PC helper, fresh PATH for jobs, helper starts without Finish, Tailscale kept connected | ✅ | Found by the first real Windows + Mac run |
 | 9 | **v0.1.3**: missing programs (catalog, hints, `pc_install`, Settings → Programs), PyTorch in the wizard, targeted output detection, ad-hoc Mac signing + App Translocation self-heal | ✅ | Released and confirmed on the real Mac and PC: signed Mac app opens normally, PC self-updated 0.1.2 → 0.1.3, a GPU job finished in 3.2 s (was 30–60 s). Still to try: a real install from Settings → Programs (winget codes, Windows "Yes" prompt, Blender folder) |
 | 10 | **v0.1.4**: learning router (both machines, compute time only, job signatures), ComfyUI in the GPU slot, token file instead of Keychain, refused-key message, one pairing per Mac, Ctrl-C cancels PC jobs, process-tree cancel, quoting fixes, updates wait for idle, Jobs list survives restarts, safer sync | ✅ | |
+| 11 | **v0.1.5**: `pc_run` uses the router, decide before waking, PC queue estimate, memory guard both ways, honest reasons, every tool wakes the PC, keep-awake lease, Ollama VRAM freed for GPU jobs, finish notifications, setup refresh + What's new, open-session reminder, hourly updates + version note, window freed on close, MCP tool annotations | ✅ | |
+| 12 | **v0.2**: background jobs, live progress and log viewer, better estimates, learned RAM/VRAM | ⏳ | see below |
 
 ## Detailed checklist
 
@@ -125,6 +127,27 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Safer sync: atomic push, 14-day trashcan versioning, `.git`/`.claude` ignored, 2 s watcher delay, settings re-applied at Mac start
 - [ ] Try on the real PC and Mac: Ctrl-C cancel, the pairing claim, the Keychain-to-file move
 
+### Phase 11 — v0.1.5
+- [x] `pc_run` defaults to the router (`mode: "pc"` forces the PC); `npm`/`docker`… sent by Claude still go to the PC
+- [x] Decide before waking: a sleeping PC is only woken when the router still prefers it with the wake cost included
+- [x] `/status.queue_eta_secs`: the PC's own wait estimate (median run time of the same program, minus elapsed for running jobs), used by the router instead of 60 s per queued job
+- [x] Memory guard: a job that fits on the Mac isn't sent to a PC without room for it
+- [x] Honest reasons on forced PC runs ("Sent to the PC as asked…")
+- [x] Every PC tool wakes the PC first; `pc_wake` keeps it awake (`minutes`, max 120); the PC stays awake 10 min after each job (`/keep-awake` lease, refreshed every 30 s)
+- [x] GPU jobs unload Ollama models from VRAM first (best effort, logged on the job)
+- [x] Mac notification when a PC job of a minute or more ends (`notify_on_finish`)
+- [x] After an update the Mac refreshes the installed parts of Claude's setup and shows "Updated to …"; a card counts Claude sessions opened before the change
+- [x] Hourly update checks on both apps; the Mac status says when the PC runs another version
+- [x] Mac window really closes (web view freed) and is rebuilt from the menu bar
+- [x] MCP tool annotations (title, read-only, destructive, idempotent, open-world false)
+- [ ] Try on the real PC and Mac: no-wake routing, the keep-awake lease with Windows sleep settings, the window reopening, the "Updated to" card after 0.1.4 → 0.1.5
+
+### Phase 12 — v0.2 (planned)
+- [ ] **Background jobs**: `pc_run` and `pc_delegate_task` can return a job id at once (`background: true`), with `pc_job_status` / `pc_job_result` / `pc_job_cancel` tools, so Claude keeps working while a long render runs, and the notification says when to collect it
+- [ ] **Live progress and a log viewer**: ffmpeg `time=` / frame counts, Blender `Fra:`, tqdm bars and ComfyUI progress parsed into percent and ETA on the agent; shown in the menu bar, the Jobs tab (live log with search) and `pc_job_status`
+- [ ] **Better estimates**: learn per-signature size curves (not only seconds per MB), use video duration and resolution for ffmpeg, frame ranges for Blender and step counts for diffusion; show the estimate before a job starts
+- [ ] **Learned RAM/VRAM**: record peak RAM and VRAM per job signature on the PC (process tree sampling, `nvidia-smi`), use it in the memory guard instead of fixed guesses, and queue a GPU job until enough VRAM is free
+
 ## What's next (after v0.1)
 
 ```mermaid
@@ -132,8 +155,9 @@ timeline
   title PC Bridge roadmap
   v0.1 : Both apps + wizards : Smart, memory-aware router : CI + installers : Signed auto-updates (0.1.2)
   v0.1.3 : Missing programs - one-click install (15 MCP tools) : Faster jobs on big shared folders : PyTorch in the wizard : Mac "damaged" fix
-  v0.1.4 — now : Router learns from both machines : No more Keychain prompt : One pairing per Mac : Safer file sync
-  v0.2 : Live job progress in the menu bar : Signed + notarised builds
+  v0.1.4 : Router learns from both machines : No more Keychain prompt : One pairing per Mac : Safer file sync
+  v0.1.5 — now : Decide before waking : Real queue estimate : Finish notifications : Setup refresh after updates
+  v0.2 : Background jobs : Live progress and log viewer : Better estimates : Learned RAM/VRAM : Signed + notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake from away via an always-on tailnet device
 ```
 
@@ -142,7 +166,10 @@ timeline
 | ✅ **0.1.3** | **Missing programs: tell Claude and offer a one-click install.** When a job needs a program the PC doesn't have (Blender, PyTorch…), the job result says exactly what's missing and the install command, so Claude can offer it. The PC app shows an **Install Blender** button. Programs go in their normal Windows place, never in the shared folders | Today the job just fails with "program not found" and you have to know what to install |
 | ✅ **0.1.3** | **Faster jobs on big shared folders**: look for a job's new files only in the folders it names and its own folder (with a time limit), instead of scanning the whole shared folder | Even tiny jobs take 20–45 s when the shared folder is very large |
 | ✅ **0.1.3** | **Optional "PyTorch with GPU support" in the PC wizard** (step 6, next to Ollama and ComfyUI), plus a free-space check on drive C: | The final GPU test needs PyTorch, which the wizard didn't install (found on the first real run) |
-| 0.2 | Live progress (percent / ETA) for ffmpeg and ComfyUI jobs in the menu bar | Long encodes currently show only "running" |
+| 0.2 | **Background jobs**: start a long job, get its id back at once, check or collect it later (`pc_job_status`, `pc_job_result`, `pc_job_cancel`) | Today Claude waits for the whole render before it can do anything else |
+| 0.2 | **Live progress and log viewer** (percent / ETA) for ffmpeg, Blender, Python progress bars and ComfyUI, in the menu bar and the Jobs tab | Long encodes currently show only "running" |
+| 0.2 | **Better estimates** from video length, frame ranges and step counts, shown before the job starts | Seconds-per-MB is a rough guess for renders and diffusion |
+| 0.2 | **Learned RAM/VRAM** per kind of job, used by the memory guard and to wait for free VRAM | Memory needs are fixed guesses today |
 | 0.2 | Code signing + notarisation | Removes the "unidentified developer" / SmartScreen steps |
 | 0.2 | Send whole project folders for Node/Docker without a separate `npm ci` on the PC | Removes a known limitation |
 | 0.3 | Several PCs, choose by free VRAM | Households/studios with more than one GPU box |
@@ -168,6 +195,7 @@ timeline
 - **2026-11-21** (v0.1.3) Mac Gatekeeper: 0.1.2 shipped with only the linker's signature, so macOS 15 called it "damaged" and App Translocation ran it from a read-only copy that couldn't update. Fix: ad-hoc signing in the bundler (no paid certificate yet; hardened runtime off because it's only for notarization), a release check with `codesign`, and a self-heal at start that removes the quarantine mark from `/Applications/PC Bridge.app` only (the user has already opened it) and relaunches from there. Found by the first real Mac install of 0.1.2.
 - **2026-11-21** (after v0.1.3) The router learns from both machines: Mac runs are recorded too, PC rows store the agent's compute time with queue and transfer kept apart, and each row has a job signature (`python:train.py`, `ffmpeg:libx264`…). The Mac and PC rates are only compared at the same level (same signature, or tool-wide over shared signatures), and sizes are counted as at least 1 MB in both learning and estimating. Review found that mixing levels and clamping sizes differently (0.001 MB vs 1 MB) sent 3-second jobs on a wake-and-queue round trip. Agents before 0.1.4 can't say what was compute, so their rows are approximate. ComfyUI jobs now take the single GPU slot like every other GPU job; Ollama doesn't (a chat would wait behind an hour-long render, and Ollama fits models in free VRAM by itself). A missed ComfyUI answer no longer frees the slot while the prompt still runs.
 - **2026-11-21** (v0.1.4) Mac pairing key moved from the Keychain to a 0600 file: ad-hoc signing gives each build a new identity, so the Keychain asked for the Mac password after every update and blocked MCP calls until answered. Same protection model as the PC's copy (only the user can read it). Syncthing gets trashcan versioning (14 days) and ignores `.git`/`.claude` so a mistaken overwrite is recoverable and repositories are never written by two computers at once.
+- **2026-11-21** (v0.1.5) `pc_run` defaults to the router instead of always the PC: with learned timings the router is now trustworthy, and the result always says where and why. The decision is made before Wake-on-LAN (the wake cost is part of the estimate), and the PC estimates its own queue from its job history. The PC keeps itself awake with a lease (10 min after each job, or what `pc_wake` asks for) and drops Ollama models from VRAM before a GPU job, because a chat model left loaded can make a render run out of graphics memory.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations
