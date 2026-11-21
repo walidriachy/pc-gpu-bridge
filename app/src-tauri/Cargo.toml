@@ -1,0 +1,9 @@
+[package]
+name = "pc-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pc-bridge"
+path = "src/main.rs"

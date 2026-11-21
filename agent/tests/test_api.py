@@ -111,6 +111,8 @@ def test_files_push_pull(env):
     assert r.json()["bytes"] == 8
     assert c.get("/files/pull", params={"path": "workspace/up/hello.txt"}).content == b"hi there"
     assert c.get("/files/pull", params={"path": "workspace/nope.txt"}).status_code == 404
+    assert c.get("/files/stat", params={"path": "workspace/up/hello.txt"}).json()["size"] == 8
+    assert c.get("/files/stat", params={"path": "workspace/none"}).json() == {"exists": False}
 
 
 def test_delegate_real_stream_json(env, tmp_path):
