@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — v0.1.0 feature-complete; CI green on Linux, macOS and Windows (agent 30 tests, core 44, UI 6, real Rust↔Python e2e); preparing the first public release_
+_Last updated: 2026-11-21 — **v0.1.0 released** (public, MIT): installers on the Releases page; CI green on Linux, macOS and Windows_
 
 ## Architecture in one picture
 
@@ -34,7 +34,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ✅ | Windows paths verified in CI build only (no Windows box here) |
 | 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | ✅ | Windows CI caught 2 path-separator bugs, both fixed |
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ✅ | |
-| 7 | GitHub repo, first release, CI green | 🔄 | Repo + CI ✅; going public as open source with full docs; v0.1.0 tag next |
+| 7 | GitHub repo, first release, CI green | ✅ | Public repo, v0.1.0 release with `PC Bridge.dmg` + `PC Bridge Setup.exe` |
 
 ## Detailed checklist
 
@@ -82,7 +82,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] README (assumptions first), `docs/GUIDE.md` (mirrors both wizards, unsigned-app steps, troubleshooting), LICENSE (MIT)
 - [x] Repo created and pushed, CI green
 - [x] Open-source docs: README, USAGE, ARCHITECTURE (diagrams), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, issue/PR templates, Dependabot
-- [ ] Public visibility + tag v0.1.0 → installers on the release page
+- [x] Public visibility + tag v0.1.0 → installers on the release page
 
 ## What's next (after v0.1)
 
