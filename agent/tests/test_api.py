@@ -153,3 +153,14 @@ def test_gpu_endpoint_with_fake_smi(env, tmp_path):
 
 def test_cancel_unknown(env):
     assert env["client"].post("/jobs/nope/cancel").status_code == 404
+
+
+def test_syncthing_not_configured(env):
+    assert env["client"].get("/syncthing/info").status_code == 503
+
+
+def test_new_pairing_code_needs_auth(env):
+    anon = TestClient(env["app"])
+    assert anon.post("/pair/new").status_code == 401
+    code = env["client"].post("/pair/new").json()["code"]
+    assert code == env["client"].get("/pair/code").json()["code"]

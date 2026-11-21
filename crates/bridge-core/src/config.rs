@@ -33,6 +33,8 @@ pub struct BridgeConfig {
     pub notify_on_fallback: bool,
     pub setup_complete: bool,
     pub wizard_step: u32,
+    /// API key for PC Bridge's private Syncthing instance on this Mac.
+    pub syncthing_api_key: String,
 }
 
 impl Default for BridgeConfig {
@@ -50,6 +52,7 @@ impl Default for BridgeConfig {
             notify_on_fallback: true,
             setup_complete: false,
             wizard_step: 0,
+            syncthing_api_key: String::new(),
         }
     }
 }

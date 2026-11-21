@@ -29,6 +29,7 @@ from .gpu import query_gpus
 from .jobs import Job, JobQueue
 from .memory import memory_info
 from .pairing import PairingStore
+from .syncthing import Syncthing, SyncthingError, folder_id
 
 TOOLS = ("ffmpeg", "ffprobe", "python", "claude", "blender", "docker", "node", "npm", "pnpm", "ollama")
 
@@ -54,6 +55,12 @@ class DelegateRequest(BaseModel):
 class PairRequest(BaseModel):
     code: str
     device_name: str = "Mac"
+
+
+class ShareRequest(BaseModel):
+    mac_device_id: str
+    mac_name: str = "Mac"
+    folders: list[str]  # folder names inside workspace/
 
 
 class OllamaChat(BaseModel):
@@ -157,12 +164,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "token": token,
             "hostname": socket.gethostname(),
             "root": str(root),
-            "mac_address": _mac_address(),
+            "mac_address": settings.mac_address or _mac_address(),
             "platform": platform.platform(),
             "version": __version__,
         }
 
     # ---- authenticated ---------------------------------------------------
+    @app.post("/pair/new", dependencies=[Depends(auth)])
+    async def pair_new():
+        """Fresh pairing code (used by the PC's own app via its local token)."""
+        return {"code": pairing.new_code(), "expires_in": 15 * 60}
+
+    @app.get("/pair/code", dependencies=[Depends(auth)])
+    async def pair_code():
+        return {"code": pairing.ensure_code()}
+
     @app.get("/status", dependencies=[Depends(auth)])
     async def status():
         running = [queue.jobs[j].summary() for j in queue.running if j in queue.jobs]
@@ -315,6 +331,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield block
 
         return StreamingResponse(gen(), media_type="application/octet-stream")
+
+    # ---- Syncthing pairing -------------------------------------------------
+    def _syncthing() -> Syncthing:
+        if not settings.syncthing_api_key:
+            raise HTTPException(503, "Syncthing isn't set up on the PC yet (open PC Bridge on the PC)")
+        return Syncthing(settings.syncthing_api_key, settings.syncthing_url)
+
+    @app.get("/syncthing/info", dependencies=[Depends(auth)])
+    async def syncthing_info():
+        try:
+            return {"device_id": await asyncio.to_thread(_syncthing().device_id)}
+        except SyncthingError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/syncthing/share", dependencies=[Depends(auth)])
+    async def syncthing_share(req: ShareRequest):
+        st = _syncthing()
+
+        def work():
+            pc_id = st.device_id()
+            st.add_device(req.mac_device_id, req.mac_name)
+            shared = []
+            for name in req.folders:
+                path = safe_path(root, f"workspace/{name}")
+                st.share_folder(folder_id(name), name, path, [req.mac_device_id, pc_id])
+                shared.append({"id": folder_id(name), "name": name, "path": str(path)})
+            return {"pc_device_id": pc_id, "folders": shared}
+
+        try:
+            return await asyncio.to_thread(work)
+        except SyncthingError as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     # ---- optional local AI tools ------------------------------------------
     @app.post("/ollama/chat", dependencies=[Depends(auth)])

@@ -49,6 +49,9 @@ class Settings:
     claude_cmd: str = "claude"
     nvidia_smi_cmd: str = "nvidia-smi"
     bind_hosts: list[str] = field(default_factory=list)  # empty = 127.0.0.1 + Tailscale IP
+    mac_address: str = ""  # Ethernet MAC for Wake-on-LAN (set by the Windows app); empty = auto
+    syncthing_api_key: str = ""
+    syncthing_url: str = "http://127.0.0.1:8385"
 
     @property
     def root_path(self) -> Path:

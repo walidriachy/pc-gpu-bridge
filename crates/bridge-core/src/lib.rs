@@ -11,4 +11,5 @@ pub mod paths;
 pub mod router;
 pub mod secrets;
 pub mod shim;
+pub mod syncthing;
 pub mod wol;
