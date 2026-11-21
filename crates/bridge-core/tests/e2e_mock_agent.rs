@@ -142,7 +142,9 @@ fn ffmpeg_shim_round_trip_through_mock_agent() {
     assert_eq!(std::fs::read(ws.join("out.mp4")).unwrap(), b"abc");
     assert_eq!(r.outputs, vec![ws.join("out.mp4")]);
     // PC paths in tool output rewritten to Mac paths
-    assert!(io.stderr.contains(&ws.join("out.mp4").display().to_string()), "{}", io.stderr);
+    // (Separators normalised: on Windows CI the simulated "Mac" folder is a Windows temp path.)
+    let want = ws.join("out.mp4").display().to_string().replace('\\', "/");
+    assert!(io.stderr.replace('\\', "/").contains(&want), "{}", io.stderr);
     let seen = seen.lock().unwrap();
     assert!(seen.auth_ok);
     assert_eq!(seen.pushed.len(), 1, "input should be pushed when missing on the PC");
