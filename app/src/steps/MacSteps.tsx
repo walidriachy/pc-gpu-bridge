@@ -32,6 +32,9 @@ function TailscaleStep({ setDone }: StepCtx) {
       if (!t.installed) {
         setState({ status: "fail", message: "Tailscale isn't installed yet.", fix: "Click “Download Tailscale”, install it, then click “Check again”." });
         setDone(false);
+      } else if (t.unreadable) {
+        setState({ status: "fail", message: "PC Bridge couldn't read Tailscale's status.", fix: `Make sure the Tailscale app is open, then click “Check again”. If this keeps happening, use Help → Run diagnostics. (Details: ${t.detail || "no answer"})` });
+        setDone(false);
       } else if (!t.running) {
         setState({ status: "fail", message: "Tailscale is installed but not connected.", fix: "Click the Tailscale icon in the menu bar at the top of the screen and choose “Log in…”. Use the same account you'll use on the PC." });
         setDone(false);

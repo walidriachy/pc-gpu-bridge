@@ -142,6 +142,15 @@ pub fn install_shims(bin_dir: &Path, binary: &str, tools: &[&str]) -> Result<Vec
         }
         written.push(p);
     }
+    // `pc-bridge` itself, so `pc-bridge run -- <cmd>` and `pc-bridge doctor` work from Terminal.
+    let launcher = bin_dir.join("pc-bridge");
+    std::fs::write(&launcher, format!("#!/bin/sh\nexec \"{binary}\" \"$@\"\n")).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    written.push(launcher);
     Ok(written)
 }
 
@@ -231,7 +240,9 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let bin = d.path().join(".pcbridge/bin");
         let files = install_shims(&bin, "/x/pc-bridge", &["ffmpeg", "python3"]).unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3); // 2 shims + the pc-bridge launcher
+        let launcher = std::fs::read_to_string(files.last().unwrap()).unwrap();
+        assert!(launcher.contains("exec \"/x/pc-bridge\" \"$@\""), "{launcher}");
         let s = std::fs::read_to_string(bin.join("ffmpeg")).unwrap();
         assert!(s.contains("exec \"/x/pc-bridge\" shim ffmpeg \"$@\""));
         let changed = install_path(d.path(), &bin).unwrap();

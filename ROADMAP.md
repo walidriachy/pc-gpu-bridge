@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — Phases 1–6 complete (agent 30 tests, core 44 tests incl. real Rust↔Python e2e, UI 6 tests; clippy/eslint/ruff clean); CI written; Phase 7 (repo + first release) in progress_
+_Last updated: 2026-11-21 — v0.1.0 feature-complete; CI green on Linux, macOS and Windows (agent 30 tests, core 44, UI 6, real Rust↔Python e2e); preparing the first public release_
 
 ## Architecture in one picture
 
@@ -32,9 +32,9 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 2b | **Memory-aware routing (added 2026-11-21)**: Mac memory pressure, RAM estimates, docker/node/npm/pnpm shims (opt-in per project), generic `pc_run_task`, Mac vs PC RAM side by side, Help text | ✅ | Mac reports its RAM to the PC (`POST /peer/memory`) so both apps show Mac vs PC |
 | 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | ✅ | React + TS, light/dark |
 | 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ✅ | Windows paths verified in CI build only (no Windows box here) |
-| 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | 🔄 | |
+| 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | ✅ | Windows CI caught 2 path-separator bugs, both fixed |
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ✅ | |
-| 7 | GitHub repo, first release, CI green | 🔄 | |
+| 7 | GitHub repo, first release, CI green | 🔄 | Repo + CI ✅; going public as open source with full docs; v0.1.0 tag next |
 
 ## Detailed checklist
 
@@ -80,7 +80,29 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] `ci.yml`: agent pytest + ruff (Linux + Windows); Rust fmt + clippy + tests (macOS + Windows); UI lint + tests; real-agent e2e; installer build on both OSes
 - [x] `release.yml`: on tag `v*` → `PC Bridge.dmg` (Apple Silicon) + `PC Bridge Setup.exe`
 - [x] README (assumptions first), `docs/GUIDE.md` (mirrors both wizards, unsigned-app steps, troubleshooting), LICENSE (MIT)
-- [ ] Private repo, push, tag v0.1.0, CI green
+- [x] Repo created and pushed, CI green
+- [x] Open-source docs: README, USAGE, ARCHITECTURE (diagrams), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, issue/PR templates, Dependabot
+- [ ] Public visibility + tag v0.1.0 → installers on the release page
+
+## What's next (after v0.1)
+
+```mermaid
+timeline
+  title PC Bridge roadmap
+  v0.1 — now : Both apps + wizards : Smart, memory-aware router : 14 MCP tools : CI + installers
+  v0.2 : Live job progress in the menu bar : In-app auto-update : Signed + notarised builds
+  v0.3 : Several PCs / GPUs : Linux PC agent : Wake from away via an always-on tailnet device
+```
+
+| Version | Item | Why |
+|---|---|---|
+| 0.2 | Live progress (percent / ETA) for ffmpeg and ComfyUI jobs in the menu bar | Long encodes currently show only "running" |
+| 0.2 | Auto-update (Tauri updater) | Beginners shouldn't need to re-download installers |
+| 0.2 | Code signing + notarisation | Removes the "unidentified developer" / SmartScreen steps |
+| 0.2 | Send whole project folders for Node/Docker without a separate `npm ci` on the PC | Removes a known limitation |
+| 0.3 | Several PCs, choose by free VRAM | Households/studios with more than one GPU box |
+| 0.3 | Linux PC agent (same Python agent, systemd unit) | Many GPU boxes run Linux |
+| 0.3 | Wake-on-LAN from away, relayed by an always-on device on the tailnet | Today WoL only works on the home network |
 
 ## Decisions log
 - **2026-11-21** One Rust binary serves app + MCP + shims → no Python/Node needed on the Mac.
@@ -89,6 +111,8 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - **2026-11-21** Node/Docker shims are opt-in per project: a `.pcbridge` file in the project with `offload = ["npm","docker"]` — avoids surprising redirection of everyday commands.
 - **2026-11-21** Real-agent e2e found that POSIX agent roots (tests, WSL2 mode) need `/` paths and keep `python3`; fixed in `PathMapper`/`plan`.
 - **2026-11-21** Both apps show Mac vs PC RAM: the Mac posts its memory to the agent on every status poll (window + tray), the PC app reads it from `/status.peer_memory`.
+- **2026-11-21** macOS Tailscale CLI is the app binary; started from a GUI app (no TTY) it tries to open its GUI → always set `TAILSCALE_BE_CLI=1` (found by the first real user run). Added `pc-bridge doctor` to check this without the window.
+- **2026-11-21** Open-sourced under MIT with full contributor docs.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations
