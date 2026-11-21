@@ -4,6 +4,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **`pc_run` now lets the smart router choose** (it used to always send to the PC). It weighs past run times, file sizes, free memory on both computers, the PC's queue and whether the PC is asleep, then says where it ran and why. Use `mode: "pc"` to always use the PC. Commands Claude explicitly sends with `npm`, `docker` and the like still go to the PC.
+- **A sleeping PC is only woken when it's worth it.** The router now decides before sending Wake-on-LAN: a small job that's quicker on the Mac runs there and the PC stays asleep.
+- **The PC's queue is estimated properly.** The PC reports how long a new job would wait, from how long the same programs took before, instead of assuming one minute per queued job.
+- **Memory guard both ways.** A job is no longer sent to a PC that doesn't have the memory for it when the Mac does.
+- **Honest reasons.** When a job is sent to the PC because you asked, the result says so (and if the Mac would have been quicker).
+- **Every PC tool wakes the PC.** `pc_run_task`, `pc_delegate_task`, `pc_gpu`, file copies, `comfy_generate` and `ollama_chat` now wake a sleeping PC first instead of failing.
+- **The PC stays awake between jobs.** It stays awake 10 minutes after each job, so a follow-up job doesn't have to wake it. `pc_wake` can keep it awake longer (`minutes`, up to 2 hours).
+- **GPU jobs get the whole graphics card.** Before a GPU job starts, the PC unloads Ollama models that are sitting in graphics memory from earlier chats. The job's log says which were unloaded.
+
 ## [0.1.4] — 2026-11-21
 
 ### Changed

@@ -55,7 +55,7 @@ pc-bridge doctor                                 # print health checks (Tailscal
 
 | Tool | Arguments (main ones) | What it does |
 |---|---|---|
-| `pc_run` | `command`, `cwd`, `mode` (`pc` or `auto`) | Run a command on the PC. Paths are translated, missing inputs pushed, outputs pulled back |
+| `pc_run` | `command`, `cwd`, `mode` (`auto`, the default, or `pc`) | Run a heavy command on whichever computer finishes it first. The router weighs past run times, file sizes, free memory on both, the PC's queue and whether the PC is asleep (a small job never wakes it). `mode: "pc"` always uses the PC. Paths are translated, missing inputs pushed, outputs pulled back; the result says where it ran and why |
 | `pc_run_task` | `command`, `cwd` | The generic "run this task on the PC" option: any command line, run in PowerShell on the PC |
 | `pc_delegate_task` | `task`, `files` | The worker Claude on the PC does the whole task and returns its answer and job folder |
 | `pc_docker` | `args`, `cwd` | `docker …` on the PC (build, run, compose) |
@@ -67,9 +67,9 @@ pc-bridge doctor                                 # print health checks (Tailscal
 | `pc_route_advice` | `command`, `cwd` | Where this command would run, and why (nothing is run) |
 | `pc_push_file` | `mac_path`, `pc_rel_path` | Copy a Mac file to the PC |
 | `pc_pull_file` | `pc_path`, `mac_path` | Copy a PC file (for example a job output) to the Mac |
-| `pc_wake` | – | Send Wake-on-LAN and wait for the PC |
+| `pc_wake` | `minutes` (0–120, default 30) | Send Wake-on-LAN, wait for the PC and keep it awake that long. The PC also stays awake 10 minutes after every job. Every other PC tool wakes the PC by itself |
 | `comfy_generate` | `workflow` (ComfyUI API-format JSON) | Queue an image workflow on ComfyUI on the PC and return the image paths |
-| `ollama_chat` | `model`, `prompt` or `messages` | Chat with a local model on the PC; models stay loaded in VRAM |
+| `ollama_chat` | `model`, `prompt` or `messages` | Chat with a local model on the PC; models stay loaded in VRAM until a GPU job needs the memory |
 
 That's 15 tools. The MCP server is registered as **`pc-bridge`** in `~/.claude.json` (Claude Code) and in `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop).
 

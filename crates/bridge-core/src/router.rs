@@ -37,6 +37,10 @@ pub struct RouteInput {
     pub pc_reachable: bool,
     pub pc_awake: bool,
     pub pc_queue_depth: u32,
+    /// The PC's own estimate of the wait for a free GPU slot (agent 0.1.5+). Preferred over
+    /// `pc_queue_depth` × a fixed guess.
+    #[serde(default)]
+    pub pc_queue_secs: Option<f64>,
     pub measured_mbps: f64,
     pub redirect_enabled: bool,
     /// From [`job_signature`]; empty means "just the tool".
@@ -460,7 +464,7 @@ pub fn decide(input: &RouteInput, history: Option<&History>) -> Decision {
     let mbps = input.measured_mbps.max(1.0);
     let overhead = history.and_then(|h| h.overhead_secs(tool, sig)).unwrap_or(0.0);
     let transfer = (2.0 * mb * 8.0 / mbps).max(overhead);
-    let queue = input.pc_queue_depth as f64 * AVG_JOB_SECS;
+    let queue = input.pc_queue_secs.unwrap_or(input.pc_queue_depth as f64 * AVG_JOB_SECS).max(0.0);
     let wake = if input.pc_awake { 0.0 } else { WAKE_SECS };
     let pc_est = (pc_rate * mb).max(MIN_JOB_SECS * 0.5) + transfer + queue + wake;
 
@@ -489,6 +493,17 @@ pub fn decide(input: &RouteInput, history: Option<&History>) -> Decision {
     if input.mac_mem.pressure == Pressure::Critical && pc_has_room {
         return d(Target::Pc, "The Mac is running low on memory".into());
     }
+    // Memory guard the other way: don't send a job to a PC that can't hold it.
+    if !pc_has_room && input.class.est_ram_bytes <= input.mac_mem.available_bytes {
+        return d(
+            Target::Mac,
+            format!(
+                "Needs about {:.1} GB of memory; the PC only has {:.1} GB free right now",
+                gb(input.class.est_ram_bytes),
+                gb(input.pc_free_ram.unwrap_or(0))
+            ),
+        );
+    }
     if pc_est < mac_est {
         d(
             Target::Pc,
@@ -515,6 +530,7 @@ mod tests {
             pc_reachable: true,
             pc_awake: true,
             pc_queue_depth: 0,
+            pc_queue_secs: None,
             measured_mbps: 900.0,
             redirect_enabled: true,
             signature: String::new(),
@@ -527,6 +543,29 @@ mod tests {
 
     fn run(tool: &str, target: Target, mb: u64, compute: f64) -> JobRecord<'_> {
         JobRecord::new(tool, JobKind::Gpu, target, mb << 20, compute, 0, "x")
+    }
+
+    #[test]
+    fn real_queue_estimate_replaces_the_guess() {
+        let mut i = input(JobKind::Gpu, GB, 2 * GB, 8 * GB, Pressure::Normal);
+        i.pc_queue_depth = 1;
+        let guessed = decide(&i, None).pc_est_secs;
+        i.pc_queue_secs = Some(600.0);
+        let real = decide(&i, None).pc_est_secs;
+        assert!((real - guessed - (600.0 - AVG_JOB_SECS)).abs() < 0.01, "{guessed} {real}");
+    }
+
+    #[test]
+    fn a_pc_without_room_is_not_used_when_the_mac_has_it() {
+        let mut i = input(JobKind::Gpu, 6 * GB, 2 * GB, 10 * GB, Pressure::Normal);
+        i.pc_free_ram = Some(2 * GB);
+        let d = decide(&i, None);
+        assert_eq!(d.target, Target::Mac, "{d:?}");
+        assert!(d.reason.contains("the PC only has 2.0 GB free"), "{}", d.reason);
+        // Neither has room: the PC is still tried (it has more memory to swap with).
+        i.mac_mem.available_bytes = 3 * GB;
+        i.pc_free_ram = Some(5 * GB);
+        assert_eq!(decide(&i, None).target, Target::Pc);
     }
 
     #[test]

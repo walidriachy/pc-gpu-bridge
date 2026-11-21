@@ -38,6 +38,10 @@ INSTALL_TIME_LIMIT_S = 3 * 3600.0
 WINGET_QUIET_NOTICE_S = 90.0
 WINGET_QUIET_LIMIT_S = 20 * 60.0
 WATCH_INTERVAL_S = 5.0
+# After a job ends the PC stays awake this long, so a follow-up job doesn't need a wake-up.
+AFTER_JOB_AWAKE_S = 10 * 60.0
+MAX_LEASE_S = 2 * 3600.0
+DEFAULT_JOB_SECS = 60.0  # queue estimate for a program the PC hasn't run yet
 
 
 def keep_awake(on: bool) -> None:
@@ -426,6 +430,10 @@ class JobQueue:
         self.running: set[str] = set()
         self._cond: asyncio.Condition | None = None
         self.on_finish = None  # optional callback(job, outputs: list[Path])
+        # Optional coroutine run when a GPU job gets its slot, before it starts (frees Ollama's VRAM).
+        self.before_gpu = None
+        self.awake_until = 0.0  # keep the PC awake until then even when idle (a lease)
+        self._awake: bool | None = None
 
     @property
     def cond(self) -> asyncio.Condition:
@@ -497,6 +505,56 @@ class JobQueue:
                 loaded += 1
         return loaded
 
+    # ---- staying awake ----------------------------------------------------
+    def lease(self, seconds: float) -> float:
+        """Keep the PC awake for at least ``seconds`` more (capped at 2 hours). Returns the deadline."""
+        seconds = max(0.0, min(float(seconds), MAX_LEASE_S))
+        self.awake_until = max(self.awake_until, time.time() + seconds)
+        self.refresh_awake()
+        return self.awake_until
+
+    def refresh_awake(self) -> bool:
+        """Tell Windows whether it may sleep: not while jobs run or wait, or a lease is open."""
+        on = bool(self.running or self.waiting) or time.time() < self.awake_until
+        if on != self._awake:
+            keep_awake(on)
+            self._awake = on
+        return on
+
+    # ---- queue estimate -----------------------------------------------------
+    @staticmethod
+    def _program(job: Job) -> str:
+        return Path(job.argv[0].replace("\\", "/")).stem.lower() if job.argv else job.kind
+
+    def typical_secs(self, job: Job) -> float:
+        """Median run time of the last 20 finished jobs of the same program, else a default."""
+        prog = self._program(job)
+        recent = [
+            d
+            for j in sorted(self.jobs.values(), key=lambda j: j.created, reverse=True)
+            if j.id != job.id
+            and j.state == "done"
+            and self._program(j) == prog
+            and (d := j.duration()) is not None
+        ][:20]
+        if not recent:
+            return DEFAULT_JOB_SECS
+        recent.sort()
+        return recent[len(recent) // 2]
+
+    def queue_eta_secs(self) -> float:
+        """Roughly how long a new GPU job would wait for a slot: what's left of the running jobs
+        plus the waiting ones, shared over the slots."""
+        now = time.time()
+        total = 0.0
+        for jid in self._lane_ids(self.running, "jobs"):
+            j = self.jobs[jid]
+            elapsed = now - (j.started or j.acquired or now)
+            total += max(5.0, self.typical_secs(j) - elapsed)
+        for jid in self._lane_ids(self.waiting, "jobs"):
+            total += self.typical_secs(self.jobs[jid])
+        return round(total / max(1, self.max_parallel), 1)
+
     @staticmethod
     def lane(job: Job) -> str:
         """Installs wait only for other installs; every other job shares the GPU slots."""
@@ -539,20 +597,29 @@ class JobQueue:
                         self.waiting.remove(job.id)
                         self.running.add(job.id)
                         job.acquired = time.time()
-                        keep_awake(True)
+                        self.refresh_awake()
                         self.cond.notify_all()
-                        return True
+                        break
                     await self.cond.wait()
             finally:
                 # Cancelled (or its task was) while waiting: never leave it blocking the lane.
                 if job.id in self.waiting:
                     self.waiting.remove(job.id)
                     self.cond.notify_all()
+        if job.gpu and lane == "jobs" and self.before_gpu is not None:
+            try:
+                await self.before_gpu(job)
+            except asyncio.CancelledError:
+                await self._release(job)
+                raise
+            except Exception:  # noqa: BLE001 - freeing VRAM is best effort
+                pass
+        return True
 
     async def _release(self, job: Job) -> None:
         self.running.discard(job.id)  # before any await, so the slot is freed even if cancelled
-        if not self.running:
-            keep_awake(False)
+        self.awake_until = max(self.awake_until, time.time() + AFTER_JOB_AWAKE_S)
+        self.refresh_awake()
         async with self.cond:
             self.cond.notify_all()
 

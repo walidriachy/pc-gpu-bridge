@@ -24,7 +24,7 @@ Send to the PC (use the `pc-bridge` MCP tools, or just run the command — shims
 
 Keep on the Mac: light edits, git, quick scripts, reading files.
 Files must be inside a folder shared with the PC; outputs appear back in the same Mac folder.
-If unsure, ask `pc_route_advice`.
+`pc_run` picks the faster computer by itself and says why; add `mode: "pc"` when a job must use the PC's GPU (CUDA). If unsure, ask `pc_route_advice`.
 If a job fails because a program is missing on the PC, offer to install it with `pc_install` (ask the user first).
 "#;
 

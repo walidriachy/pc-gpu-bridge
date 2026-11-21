@@ -2,7 +2,7 @@
 
 use crate::memory;
 use crate::paths::PathMapper;
-use crate::router::{self, RouteInput, Target};
+use crate::router::Target;
 use crate::shim::{plan, Capture, Engine};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -118,9 +118,9 @@ fn tool_defs() -> Value {
     let cmd = json!({"type": "string", "description": "Command line, e.g. \"ffmpeg -i in.mov -c:v libx264 out.mp4\""});
     let cwd = json!({"type": "string", "description": "Folder on the Mac to run in (must be shared with the PC)"});
     json!([
-        {"name": "pc_run", "description": "Run a command on the user's Windows PC (NVIDIA GPU; see pc_gpu / pc_memory) with Mac paths translated automatically. Output streams back and output files sync back to the same Mac folder. Use for ffmpeg encodes, GPU Python (torch/diffusers/whisper), blender renders, big data processing.",
+        {"name": "pc_run", "description": "Run a heavy command (ffmpeg encodes, GPU Python such as torch/diffusers/whisper, blender renders, big data processing) on whichever computer will finish it first: the user's Windows PC (NVIDIA GPU; see pc_gpu / pc_memory) or this Mac. The smart router decides from past run times, file sizes, free memory on both, the PC's queue and whether it's asleep; the result says where it ran and why. Mac paths are translated automatically, output streams back and output files land in the same Mac folder. Use mode \"pc\" when the job must run on the PC (e.g. it needs CUDA).",
          "inputSchema": {"type": "object", "properties": {"command": cmd, "cwd": cwd,
-            "mode": {"type": "string", "enum": ["pc", "auto"], "description": "pc = always the PC (default); auto = let the smart router choose"}}, "required": ["command"]}},
+            "mode": {"type": "string", "enum": ["auto", "pc"], "description": "auto = the router picks the faster computer (default); pc = always the PC"}}, "required": ["command"]}},
         {"name": "pc_run_task", "description": "Generic: run any shell command line on the PC in PowerShell (Mac paths inside shared folders are translated). Use for one-off heavy tasks with no dedicated tool.",
          "inputSchema": {"type": "object", "properties": {"command": cmd, "cwd": cwd}, "required": ["command"]}},
         {"name": "pc_docker", "description": "Run docker on the PC (build/run/compose) using the PC's RAM. Paths in shared folders are translated.",
@@ -140,7 +140,8 @@ fn tool_defs() -> Value {
          "inputSchema": {"type": "object", "properties": {"mac_path": {"type": "string"}, "pc_rel_path": {"type": "string"}}, "required": ["mac_path"]}},
         {"name": "pc_pull_file", "description": "Copy a file from the PC (path relative to PCBridge, e.g. jobs/2026-11-21/abc_x/output/a.png, or an absolute D:\\PCBridge path) to the Mac.",
          "inputSchema": {"type": "object", "properties": {"pc_path": {"type": "string"}, "mac_path": {"type": "string"}}, "required": ["pc_path", "mac_path"]}},
-        {"name": "pc_wake", "description": "Wake the PC from sleep (Wake-on-LAN) and wait until it's ready.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "pc_wake", "description": "Wake the PC from sleep (Wake-on-LAN), wait until it's ready, and keep it awake for a while (default 30 minutes, at most 120) so a series of jobs doesn't hit a sleeping PC. The PC also stays awake 10 minutes after every job by itself.",
+         "inputSchema": {"type": "object", "properties": {"minutes": {"type": "number", "description": "Keep the PC awake this many minutes (0-120, default 30)"}}}},
         {"name": "comfy_generate", "description": "Queue a ComfyUI workflow (API-format JSON) on the PC and return the generated image paths.",
          "inputSchema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
         {"name": "ollama_chat", "description": "Chat with a local LLM on the PC through Ollama (models stay warm in VRAM).",
@@ -195,6 +196,20 @@ pub fn translate_inline_quoted(mapper: &PathMapper, cmd: &str, quote: char) -> S
     out
 }
 
+/// The PC's client, woken first if it is asleep. `Err` is the tool error to return.
+fn awake_client(engine: &Engine) -> Result<&crate::client::AgentClient, Value> {
+    let Some(client) = engine.client.as_ref() else {
+        return Err(error("Not paired with a PC yet. Open PC Bridge to set it up."));
+    };
+    match engine.ensure_awake(&mut Capture::default()) {
+        Ok(_) => Ok(client),
+        Err(problem) if problem == crate::shim::KEY_REFUSED => Err(error(problem)),
+        Err(problem) => Err(error(format!(
+            "{problem}. Check the PC is on and PC Bridge is running there (Wake-on-LAN only works on the same home network)."
+        ))),
+    }
+}
+
 pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
     let mapper = engine.mapper();
     let run_words = |words: Vec<String>, cwd: &Path, force: Option<Target>| -> Value {
@@ -232,8 +247,12 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
 
     match name {
         "pc_run" => {
-            let force = if str_arg(args, "mode") == Some("auto") { None } else { Some(Target::Pc) };
-            run_words(words_arg(args, "command"), &cwd_arg(args), force)
+            let words = words_arg(args, "command");
+            let tool = words.first().map(|t| t.to_lowercase()).unwrap_or_default();
+            // npm, docker…: offloaded only by projects that opt in, unless Claude asks for them here.
+            let explicit = crate::detect::OPT_IN_TOOLS.contains(&tool.as_str());
+            let force = if str_arg(args, "mode") == Some("pc") || explicit { Some(Target::Pc) } else { None };
+            run_words(words, &cwd_arg(args), force)
         }
         "pc_docker" => {
             let mut w = vec!["docker".to_string()];
@@ -253,8 +272,9 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
             let Some(cmd) = str_arg(args, "command") else { return error("command is required") };
             let cwd = cwd_arg(args);
             let pc_cmd = translate_inline(&mapper, cmd);
-            let Some(client) = &engine.client else {
-                return error("Not paired with a PC yet. Open PC Bridge to set it up.");
+            let client = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
             };
             let cwd_rel = mapper.mac_to_rel(&cwd).unwrap_or_else(|| "workspace".into());
             let req = crate::client::RunRequest {
@@ -295,7 +315,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
         }
         "pc_delegate_task" => {
             let Some(task) = str_arg(args, "task") else { return error("task is required") };
-            let Some(client) = &engine.client else { return error("Not paired with a PC yet.") };
+            let client = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
             let files: Vec<String> =
                 words_arg(args, "files").iter().filter_map(|f| mapper.mac_to_rel(Path::new(f))).collect();
             let mut steps = 0;
@@ -354,12 +377,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
             else {
                 return error(format!("program is required (one of: {})", KNOWN_PROGRAMS.join(", ")));
             };
-            let Some(client) = &engine.client else {
-                return error("Not paired with a PC yet. Open PC Bridge to set it up.");
+            let client = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
             };
-            if let Err(problem) = engine.ensure_awake(&mut Capture::default()) {
-                return error(format!("{problem}. Check the PC is on and PC Bridge is running there."));
-            }
             let mut log = String::new();
             match client.install_program(&program, |ev| {
                 if let Some(d) = ev["data"].as_str() {
@@ -383,10 +404,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 Err(e) => error(format!("Couldn't install {program} on the PC: {e}")),
             }
         }
-        "pc_gpu" => match engine.client.as_ref().map(|c| c.gpu()) {
-            Some(Ok(g)) => text(serde_json::to_string_pretty(&g).unwrap()),
-            Some(Err(e)) => error(e.to_string()),
-            None => error("Not paired with a PC yet."),
+        "pc_gpu" => match awake_client(engine).map(|c| c.gpu()) {
+            Ok(Ok(g)) => text(serde_json::to_string_pretty(&g).unwrap()),
+            Ok(Err(e)) => error(e.to_string()),
+            Err(e) => e,
         },
         "pc_route_advice" => {
             let words = words_arg(args, "command");
@@ -396,22 +417,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 Err(why) => text(format!("Mac — {why}")),
                 Ok(p) => {
                     let st = engine.client.as_ref().and_then(|c| c.status().ok());
-                    let d = router::decide(
-                        &RouteInput {
-                            tool: tool.to_lowercase(),
-                            class: p.class.clone(),
-                            input_bytes: p.input_bytes,
-                            mac_mem: memory::local_memory(),
-                            pc_free_ram: st.as_ref().and_then(|s| s["memory"]["available_bytes"].as_u64()),
-                            pc_reachable: st.is_some(),
-                            pc_awake: st.is_some(),
-                            pc_queue_depth: st.as_ref().and_then(|s| s["queue_depth"].as_u64()).unwrap_or(0) as u32,
-                            measured_mbps: engine.cfg.measured_mbps,
-                            redirect_enabled: engine.cfg.redirect_enabled,
-                            signature: p.signature.clone(),
-                        },
-                        engine.history.as_ref(),
-                    );
+                    let d = engine.decide(&tool.to_lowercase(), &p, st.as_ref(), st.is_some());
                     text(format!(
                         "{:?} — {}\nEstimated: Mac ~{:.0}s, PC ~{:.0}s; job type {:?}, needs ~{:.1} GB RAM",
                         d.target,
@@ -426,7 +432,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
         }
         "pc_push_file" => {
             let Some(mac) = str_arg(args, "mac_path") else { return error("mac_path is required") };
-            let Some(client) = &engine.client else { return error("Not paired with a PC yet.") };
+            let client = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
             let p = Path::new(mac);
             let rel =
                 str_arg(args, "pc_rel_path").map(String::from).or_else(|| mapper.mac_to_rel(p)).unwrap_or_else(|| {
@@ -444,7 +453,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
             let (Some(pc), Some(mac)) = (str_arg(args, "pc_path"), str_arg(args, "mac_path")) else {
                 return error("pc_path and mac_path are required");
             };
-            let Some(client) = &engine.client else { return error("Not paired with a PC yet.") };
+            let client = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
             let root = engine.cfg.pc_root.trim_end_matches('\\').to_lowercase();
             let rel = if pc.to_lowercase().starts_with(&root) {
                 pc[root.len()..].trim_start_matches(['\\', '/']).replace('\\', "/")
@@ -458,24 +470,35 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
         }
         "pc_wake" => {
             let mut io = Capture::default();
+            let minutes = args.get("minutes").and_then(Value::as_f64).unwrap_or(30.0).clamp(0.0, 120.0);
+            let lease = |c: &crate::client::AgentClient| {
+                if minutes > 0.0 && c.keep_awake(minutes).is_ok() {
+                    format!(" It will stay awake for at least {minutes:.0} minutes.")
+                } else {
+                    String::new()
+                }
+            };
             match engine.ensure_awake(&mut io) {
-                Ok((_, true)) => text("The PC is already awake."),
-                Ok((_, false)) => text("The PC woke up and is ready."),
+                Ok((_, true)) => text(format!("The PC is already awake.{}", engine.client.as_ref().map(lease).unwrap_or_default())),
+                Ok((_, false)) => text(format!("The PC woke up and is ready.{}", engine.client.as_ref().map(lease).unwrap_or_default())),
                 Err(problem) if problem == crate::shim::KEY_REFUSED => error(problem),
                 Err(_) => error("Couldn't wake the PC. Wake-on-LAN only works when the Mac is on the same home network; check the PC is plugged in and Wake-on-LAN is enabled."),
             }
         }
-        "comfy_generate" => match (&engine.client, args.get("workflow")) {
-            (Some(c), Some(w)) => match c.comfy_generate(w.clone()) {
-                Ok(v) => text(serde_json::to_string_pretty(&v).unwrap()),
-                Err(e) => error(e.to_string()),
-            },
-            (None, _) => error("Not paired with a PC yet."),
-            _ => error("workflow is required"),
-        },
+        "comfy_generate" => {
+            let Some(w) = args.get("workflow") else { return error("workflow is required") };
+            match awake_client(engine).map(|c| c.comfy_generate(w.clone())) {
+                Ok(Ok(v)) => text(serde_json::to_string_pretty(&v).unwrap()),
+                Ok(Err(e)) => error(e.to_string()),
+                Err(e) => e,
+            }
+        }
         "ollama_chat" => {
             let Some(model) = str_arg(args, "model") else { return error("model is required") };
-            let Some(c) = &engine.client else { return error("Not paired with a PC yet.") };
+            let c = match awake_client(engine) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
             let messages = args
                 .get("messages")
                 .cloned()

@@ -499,3 +499,31 @@ def test_jobs_list_survives_a_restart(tmp_path):
     assert fresh.jobs[done.id].duration() == 3.5
     assert fresh.jobs[stuck.id].state == "interrupted"
     assert fresh.load_history() == 0  # loading twice adds nothing
+
+
+def test_awake_lease_and_queue_estimate(tmp_path, monkeypatch):
+    import time as _time
+
+    from pcbridge_agent import jobs as jobs_mod
+    from pcbridge_agent.jobs import JobQueue
+
+    calls = []
+    monkeypatch.setattr(jobs_mod, "keep_awake", calls.append)
+    q = JobQueue(tmp_path)
+    assert q.refresh_awake() is False and calls == [False]
+    q.lease(600)
+    assert calls[-1] is True and q.awake_until > _time.time() + 590
+    q.lease(10**6)  # capped at 2 hours
+    assert q.awake_until <= _time.time() + 2 * 3600 + 1
+
+    # Two past ffmpeg runs of 30 s and 50 s; one ffmpeg job running for 10 s, one waiting.
+    for secs in (30.0, 50.0):
+        j = q.create("run", "ffmpeg", ["ffmpeg", "-i", "a"], tmp_path)
+        j.state, j.started, j.finished = "done", 1000.0, 1000.0 + secs
+    run = q.create("run", "ffmpeg", ["ffmpeg"], tmp_path)
+    run.started = _time.time() - 10
+    q.running.add(run.id)
+    wait = q.create("run", "blender", ["blender"], tmp_path)
+    q.waiting.append(wait.id)
+    # median of [30, 50] is 50 (upper middle) -> 40 s left, plus 60 s default for blender
+    assert 95 <= q.queue_eta_secs() <= 105

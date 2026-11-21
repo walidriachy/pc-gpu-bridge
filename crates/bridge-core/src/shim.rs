@@ -314,6 +314,34 @@ impl Engine {
         PathMapper::new(self.cfg.shared_folders.clone(), self.cfg.pc_root.clone())
     }
 
+    /// Whether this Mac can send Wake-on-LAN to the PC.
+    pub fn can_wake(&self) -> bool {
+        !self.cfg.pc_mac_address.is_empty() && !self.wake_timeout.is_zero()
+    }
+
+    /// The router's choice for a planned job, given the PC's status (`None`: the PC is asleep).
+    pub fn decide(&self, tool: &str, plan: &Plan, status: Option<&Value>, awake: bool) -> Decision {
+        let mac_mem = self.mac_mem.clone().unwrap_or_else(memory::local_memory);
+        router::decide(
+            &RouteInput {
+                tool: tool.to_string(),
+                class: plan.class.clone(),
+                input_bytes: plan.input_bytes,
+                mac_mem,
+                pc_free_ram: status.and_then(|s| s["memory"]["available_bytes"].as_u64()),
+                pc_reachable: status.is_some() || self.can_wake(),
+                pc_awake: awake,
+                pc_queue_depth: status.and_then(|s| s["queue_depth"].as_u64()).unwrap_or(0) as u32,
+                pc_queue_secs: status.and_then(|s| s["queue_eta_secs"].as_f64()),
+                measured_mbps: self.cfg.measured_mbps,
+                // `run` handles "redirecting is paused" itself (an explicit PC request overrides it).
+                redirect_enabled: true,
+                signature: plan.signature.clone(),
+            },
+            self.history.as_ref(),
+        )
+    }
+
     /// Check the PC; if it's asleep send Wake-on-LAN and wait. Returns PC status JSON.
     /// Reach the PC, waking it if needed. `Err` says why it can't be used, in plain words.
     pub fn ensure_awake(&self, io: &mut dyn ShimIo) -> Result<(Value, bool), String> {
@@ -326,7 +354,7 @@ impl Engine {
             Err(ClientError::Unauthorized) => return Err(KEY_REFUSED.into()),
             Err(_) => {}
         }
-        if self.cfg.pc_mac_address.is_empty() || self.wake_timeout.is_zero() {
+        if !self.can_wake() {
             return Err("The PC couldn't be reached".into());
         }
         io.err("[PC Bridge] waking the PC…\n");
@@ -423,7 +451,25 @@ impl Engine {
             return self.local_fallback(tool, args, cwd, plan.class.reason.clone(), None, None);
         }
 
-        let (status, was_awake) = match self.ensure_awake(io) {
+        // Decide before waking: if the PC is asleep and the Mac would be quicker even without the
+        // wake-up, don't wake it at all.
+        let probe = self.client.as_ref().map(|c| c.status());
+        if force.is_none() {
+            if let Some(Err(e)) = &probe {
+                if !matches!(e, ClientError::Unauthorized) && self.can_wake() {
+                    let asleep = self.decide(&tool_l, &plan, None, false);
+                    if asleep.target == Target::Mac {
+                        let why = format!("{} (the PC is asleep, so it wasn't woken)", asleep.reason);
+                        return self.local_fallback(tool, args, cwd, why, Some(asleep), Some(&plan));
+                    }
+                }
+            }
+        }
+        let awake = match probe {
+            Some(Ok(s)) => Ok((s, true)),
+            _ => self.ensure_awake(io),
+        };
+        let (status, was_awake) = match awake {
             Ok(v) => v,
             Err(problem) => {
                 let why = format!("{problem}, so this ran on the Mac instead");
@@ -446,23 +492,7 @@ impl Engine {
             }
         };
 
-        let mac_mem = self.mac_mem.clone().unwrap_or_else(memory::local_memory);
-        let decision = router::decide(
-            &RouteInput {
-                tool: tool_l.clone(),
-                class: plan.class.clone(),
-                input_bytes: plan.input_bytes,
-                mac_mem,
-                pc_free_ram: status["memory"]["available_bytes"].as_u64(),
-                pc_reachable: true,
-                pc_awake: was_awake,
-                pc_queue_depth: status["queue_depth"].as_u64().unwrap_or(0) as u32,
-                measured_mbps: self.cfg.measured_mbps,
-                redirect_enabled: true,
-                signature: plan.signature.clone(),
-            },
-            self.history.as_ref(),
-        );
+        let decision = self.decide(&tool_l, &plan, Some(&status), was_awake);
         if force.is_none() && decision.target == Target::Mac {
             return self.local_fallback(tool, args, cwd, decision.reason.clone(), Some(decision), Some(&plan));
         }
@@ -470,7 +500,17 @@ impl Engine {
             // The PC accepted the job: whatever happened there (including "program not installed on
             // the PC", reported in `r.missing`) is the result. It is never run again on the Mac.
             Ok((mut r, t)) => {
-                r.reason = decision.reason.clone();
+                // Honest about why: when the PC was asked for but the router would have kept it here.
+                r.reason = if force == Some(Target::Pc) && decision.target == Target::Mac {
+                    format!(
+                        "Sent to the PC as asked (the Mac might have been quicker: ~{:.0}s vs ~{:.0}s via the PC)",
+                        decision.mac_est_secs, decision.pc_est_secs
+                    )
+                } else if force == Some(Target::Pc) {
+                    format!("Sent to the PC as asked. {}", decision.reason)
+                } else {
+                    decision.reason.clone()
+                };
                 r.decision = Some(decision);
                 if let Some(h) = &self.history {
                     let name = format!("{tool} {}", args.join(" "));
@@ -852,6 +892,7 @@ mod tests {
             pc_reachable: true,
             pc_awake: true,
             pc_queue_depth: 0,
+            pc_queue_secs: None,
             measured_mbps: 900.0,
             redirect_enabled: true,
             signature: router::job_signature("ffmpeg", &enc),
@@ -913,7 +954,7 @@ mod tests {
         let (_d, shared, m) = spaced();
         let p = plan(&m, "cmd", &s(&["/c", "echo", "hi"]), &shared).unwrap();
         assert_eq!(p.argv, s(&["cmd", "/c", "echo", "hi"]));
-        let new_out = shared.join("renders/run2/out.mp4");
+        let new_out = shared.join("renders").join("run2").join("out.mp4");
         let p = plan(&m, "ffmpeg", &s(&["-i", "in.mov", &new_out.display().to_string()]), &shared).unwrap();
         assert_eq!(p.argv[3], r"D:\PCBridge\workspace\Created Apps in claude\renders\run2\out.mp4");
     }

@@ -233,6 +233,11 @@ impl AgentClient {
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
 
+    /// Keep the PC awake for `minutes` more, even when idle (capped at 2 hours by the PC).
+    pub fn keep_awake(&self, minutes: f64) -> Result<Value> {
+        self.post_json("/keep-awake", &json!({"minutes": minutes}))
+    }
+
     pub fn push_file(&self, local: &Path, rel: &str) -> Result<Value> {
         let form = reqwest::blocking::multipart::Form::new()
             .text("path", rel.to_string())

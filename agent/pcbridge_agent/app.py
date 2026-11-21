@@ -88,6 +88,10 @@ class OllamaChat(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class KeepAwake(BaseModel):
+    minutes: float = Field(default=30, ge=0, le=120)
+
+
 class ComfyRequest(BaseModel):
     workflow: dict[str, Any]
     timeout: float = 600
@@ -181,6 +185,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     queue.on_finish = on_finish
 
+    def _ollama_unload_all() -> list[str]:
+        """Ask Ollama to drop every model it holds in VRAM (no-op when Ollama isn't running)."""
+        try:
+            loaded = _http_json("http://127.0.0.1:11434/api/ps", None, 2) or {}
+        except (urllib.error.URLError, OSError, ValueError):
+            return []
+        names = [m.get("name") or m.get("model") for m in loaded.get("models", [])]
+        for name in filter(None, names):
+            try:
+                _http_json("http://127.0.0.1:11434/api/generate", {"model": name, "keep_alive": 0}, 10)
+            except (urllib.error.URLError, OSError, ValueError):
+                pass
+        return [n for n in names if n]
+
+    async def before_gpu(job: Job) -> None:
+        # A GPU job gets the whole card: Ollama models loaded for chats would otherwise hold VRAM.
+        if job.kind == "install":
+            return
+        unloaded = await asyncio.to_thread(_ollama_unload_all)
+        if unloaded:
+            warm.models.clear()
+            job.emit(
+                {"type": "stderr", "data": f"[PC Bridge] freed GPU memory: unloaded {', '.join(unloaded)}\n"}
+            )
+
+    queue.before_gpu = before_gpu
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         cleanup_old(root, settings.cleanup_days)
@@ -191,9 +222,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await asyncio.to_thread(cleanup_old, root, settings.cleanup_days)
                 await asyncio.to_thread(cache.enforce_cap)
 
-        task = asyncio.get_running_loop().create_task(daily())
+        async def stay_awake():
+            while True:
+                queue.refresh_awake()  # lets Windows sleep again once a lease runs out
+                await asyncio.sleep(30)
+
+        tasks = [asyncio.get_running_loop().create_task(t()) for t in (daily, stay_awake)]
         yield
-        task.cancel()
+        for task in tasks:
+            task.cancel()
 
     app = FastAPI(title="PC Bridge Agent", version=__version__, lifespan=lifespan)
     app.state.settings = settings
@@ -289,6 +326,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "root": str(root),
             "version": __version__,
             "queue_depth": queue.queue_depth(),
+            "queue_eta_secs": queue.queue_eta_secs(),
+            "awake_until": queue.awake_until or None,
             "waiting": len(queue.waiting),
             "running": running,
             "max_parallel_jobs": settings.max_parallel_jobs,
@@ -298,6 +337,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "devices": pairing.devices(),
             "peer_memory": peer_memory or None,
         }
+
+    @app.post("/keep-awake", dependencies=[Depends(auth)])
+    async def keep_awake_lease(req: KeepAwake):
+        until = queue.lease(req.minutes * 60)
+        return {"ok": True, "awake_until": until}
 
     @app.post("/peer/memory", dependencies=[Depends(auth)])
     async def report_peer_memory(body: dict[str, Any]):

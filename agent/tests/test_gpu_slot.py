@@ -48,7 +48,10 @@ class FakeComfy:
         self.history_errors = 0  # how many /history polls fail before ComfyUI answers again
 
     def paths(self) -> list[str]:
-        return [p for _, p, _ in self.calls]
+        return [p for _, p, _ in self.calls if "11434" not in p]  # Ollama (VRAM freeing) is not ComfyUI
+
+    def ollama_calls(self) -> list[str]:
+        return [p for _, p, _ in self.calls if "11434" in p]
 
     def when(self, path: str) -> float:
         return next(t for t, p, _ in self.calls if p == path)
@@ -150,6 +153,7 @@ def test_comfy_generate_saves_images_and_reports_timings(env):
     assert (env["root"] / body["outputs"][0]).read_bytes() == b"png"
     assert body["cached"] is False and body["queue_secs"] < 1 and 0 <= body["duration"] < 5
     assert env["fake"].paths()[:2] == ["/system_stats", "/prompt"]
+    assert env["fake"].ollama_calls() == ["http://127.0.0.1:11434/api/ps"]  # VRAM freed before the job
     assert_finished(comfy_job(env), "done")
     assert_slot_free(env)
 

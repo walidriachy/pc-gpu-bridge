@@ -608,3 +608,47 @@ fn refused_key_is_reported_without_waking_the_pc() {
     assert_eq!(r.exit_code, 3);
     assert!(r.reason.contains("didn't accept this Mac's pairing key"), "{}", r.reason);
 }
+
+#[test]
+fn a_small_job_does_not_wake_a_sleeping_pc() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"x").unwrap();
+    let mut cfg = BridgeConfig::default();
+    cfg.shared_folders = vec![SharedFolder { mac_path: dir.path().display().to_string(), name: "w".into() }];
+    cfg.pc_mac_address = "00:11:22:33:44:55".into();
+    cfg.notify_on_fallback = false;
+    let engine = Engine {
+        cfg,
+        // Nothing listens here: the PC is "asleep".
+        client: Some(AgentClient::new("http://127.0.0.1:9", Some("t".into()))),
+        history: None,
+        mac_mem: None,
+        local: |_, _, _| 0,
+        wake_timeout: Duration::from_secs(60),
+    };
+    let mut io = Capture::default();
+    let start = std::time::Instant::now();
+    let r = engine.run("ffmpeg", &args(&["-i", "in.mov", "-c:v", "libx264", "o.mp4"]), dir.path(), None, &mut io);
+    assert_eq!(r.target, Target::Mac);
+    assert!(r.reason.contains("asleep, so it wasn't woken"), "{}", r.reason);
+    assert!(!io.stderr.contains("waking"), "{}", io.stderr);
+    assert!(start.elapsed() < Duration::from_secs(10), "must not wait for a wake");
+}
+
+#[test]
+fn forced_pc_runs_say_why_honestly() {
+    let (url, _seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"x").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| 0);
+    let mut io = Capture::default();
+    let r = engine.run(
+        "ffmpeg",
+        &args(&["-i", "in.mov", "-c:v", "libx264", "o.mp4"]),
+        dir.path(),
+        Some(Target::Pc),
+        &mut io,
+    );
+    assert_eq!(r.target, Target::Pc);
+    assert!(r.reason.starts_with("Sent to the PC as asked"), "{}", r.reason);
+}
