@@ -122,7 +122,12 @@ impl AgentClient {
     }
 
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
-        let r = self.req(reqwest::Method::POST, path).timeout(Duration::from_secs(60)).json(body).send().map_err(map_err)?;
+        let r = self
+            .req(reqwest::Method::POST, path)
+            .timeout(Duration::from_secs(60))
+            .json(body)
+            .send()
+            .map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
 

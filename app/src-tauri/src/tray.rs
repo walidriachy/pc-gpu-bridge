@@ -54,7 +54,13 @@ pub struct Snapshot {
     pub job: String,
 }
 
-pub fn summarize(pc: Option<&Value>, gpu: Option<&Value>, mac_free: Option<u64>, light: Light, status: &str) -> Snapshot {
+pub fn summarize(
+    pc: Option<&Value>,
+    gpu: Option<&Value>,
+    mac_free: Option<u64>,
+    light: Light,
+    status: &str,
+) -> Snapshot {
     let g = gpu.and_then(|g| g["gpus"].get(0));
     let gpu_line = match g {
         Some(g) => format!(
@@ -130,7 +136,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let pause = if cfg!(windows) {
         None
     } else {
-        Some(CheckMenuItem::with_id(app, "pause", "Pause redirecting", true, !BridgeConfig::load().redirect_enabled, None::<&str>)?)
+        Some(CheckMenuItem::with_id(
+            app,
+            "pause",
+            "Pause redirecting",
+            true,
+            !BridgeConfig::load().redirect_enabled,
+            None::<&str>,
+        )?)
     };
     let menu = Menu::new(app)?;
     for item in [&status as &dyn tauri::menu::IsMenuItem<Wry>, &gpu, &ram, &job, &sep1, &open_jobs] {
@@ -225,7 +238,8 @@ mod tests {
 
     #[test]
     fn summary_lines() {
-        let pc = json!({"memory": {"available_bytes": 27u64 << 30}, "running": [{"name": "ffmpeg encode"}], "waiting": 0});
+        let pc =
+            json!({"memory": {"available_bytes": 27u64 << 30}, "running": [{"name": "ffmpeg encode"}], "waiting": 0});
         let gpu = json!({"gpus": [{"utilization": 87.0, "vram_used_mb": 4096.0, "vram_total_mb": 24576.0}]});
         let s = summarize(Some(&pc), Some(&gpu), Some(6u64 << 30), Light::Green, "PC ready");
         assert_eq!(s.gpu, "GPU 87% · VRAM 4.0/24 GB");

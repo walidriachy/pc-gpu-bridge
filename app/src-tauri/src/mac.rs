@@ -124,7 +124,9 @@ pub async fn pair_pc(host: String, code: String) -> Result<Value, String> {
         }
         let c = AgentClient::new(format!("http://{host}:8765"), None);
         c.health().map_err(|e| {
-            format!("Can't reach PC Bridge on '{host}'. Is the PC on, with PC Bridge open and Tailscale connected? ({e})")
+            format!(
+                "Can't reach PC Bridge on '{host}'. Is the PC on, with PC Bridge open and Tailscale connected? ({e})"
+            )
         })?;
         let r = c.pair(&code, &computer_name()).map_err(|e| e.to_string())?;
         let token = r["token"].as_str().ok_or("The PC didn't send a token")?;
@@ -202,7 +204,10 @@ pub async fn share_folders(folders: Vec<String>, state: State<'_, AppState>) -> 
         let c = client(&cfg).ok_or("Pair with the PC first")?;
         let names: Vec<String> = list.iter().map(|f| f.name.clone()).collect();
         let r = c
-            .post_json("/syncthing/share", &json!({"mac_device_id": mac_id, "mac_name": computer_name(), "folders": names}))
+            .post_json(
+                "/syncthing/share",
+                &json!({"mac_device_id": mac_id, "mac_name": computer_name(), "folders": names}),
+            )
             .map_err(|e| e.to_string())?;
         let pc_id = r["pc_device_id"].as_str().ok_or("The PC didn't return its Syncthing ID")?.to_string();
         st.add_device(&pc_id, "PC", &format!("tcp://{}:22000", cfg.pc_host))?;
@@ -419,13 +424,21 @@ pub async fn jobs_list() -> Result<Value, String> {
             .map(|mut j| {
                 let outs: Vec<String> = j["outputs"]
                     .as_array()
-                    .map(|a| a.iter().filter_map(|o| o.as_str()).filter_map(|o| mapper.rel_to_mac(o)).map(|p| p.display().to_string()).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|o| o.as_str())
+                            .filter_map(|o| mapper.rel_to_mac(o))
+                            .map(|p| p.display().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 j["mac_outputs"] = json!(outs);
                 j
             })
             .collect();
-        let history = bridge_core::router::History::open(&home_dir().join("history.sqlite")).map(|h| h.recent(100)).unwrap_or_default();
+        let history = bridge_core::router::History::open(&home_dir().join("history.sqlite"))
+            .map(|h| h.recent(100))
+            .unwrap_or_default();
         Ok(json!({"pc_jobs": jobs, "history": history}))
     })
     .await
