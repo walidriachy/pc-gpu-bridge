@@ -21,7 +21,7 @@ import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -68,7 +68,10 @@ class Job:
     state: str = "queued"
     exit_code: int | None = None
     created: float = field(default_factory=time.time)
-    started: float | None = None
+    queued: float | None = None  # joined the queue
+    acquired: float | None = None  # got its slot
+    started: float | None = None  # its process (or ComfyUI prompt) started
+    exited: float | None = None  # its process ended, before outputs were collected
     finished: float | None = None
     outputs: list[str] = field(default_factory=list)
     cached: bool = False
@@ -92,6 +95,20 @@ class Job:
             with open(self.folder / "log.txt", "a", encoding="utf-8", errors="replace") as f:
                 f.write(event.get("data") or json.dumps(event.get("event")) + "\n")
 
+    def duration(self) -> float | None:
+        """Seconds the job's process ran (compute only: no queue wait, no output collection)."""
+        if not self.started:
+            return None
+        end = self.exited or self.finished or time.time()
+        return round(max(0.0, end - self.started), 3)
+
+    def queue_secs(self) -> float:
+        """Seconds the job waited for its slot (so far, while it is still waiting)."""
+        if not self.queued:
+            return 0.0
+        end = self.acquired or self.finished or time.time()
+        return round(max(0.0, end - self.queued), 3)
+
     def summary(self) -> dict:
         return {
             "id": self.id,
@@ -103,7 +120,8 @@ class Job:
             "created": self.created,
             "started": self.started,
             "finished": self.finished,
-            "duration": (self.finished or time.time()) - self.started if self.started else None,
+            "duration": self.duration(),
+            "queue_secs": self.queue_secs(),
             "outputs": self.outputs,
             "cached": self.cached,
             "folder": str(self.folder),
@@ -127,6 +145,23 @@ class Job:
             if i < len(self.events):
                 continue
             await self._changed.wait()
+
+
+def exit_event(job: Job, code: int) -> dict:
+    """The last event of every job."""
+    return {
+        "type": "exit",
+        "code": code,
+        "state": job.state,
+        "duration": job.duration() or 0.0,
+        "queue_secs": job.queue_secs(),
+        "cached": job.cached,
+        "outputs": job.outputs,
+    }
+
+
+# Work run while holding a GPU slot instead of a process (ComfyUI): returns the exit code.
+Work = Callable[[Job], Awaitable[int]]
 
 
 # Folders that never hold a job's results but can contain hundreds of thousands of files.
@@ -396,43 +431,80 @@ class JobQueue:
         """Jobs waiting for or using the GPU slots (installs don't count: they don't use the GPU)."""
         return len(self._lane_ids(self.waiting, "jobs")) + len(self._lane_ids(self.running, "jobs"))
 
-    async def submit(self, job: Job) -> None:
-        """Start the job in the background; returns immediately."""
+    async def submit(self, job: Job, work: Work | None = None) -> None:
+        """Start the job in the background; returns immediately.
+
+        With ``work``, the job runs that coroutine while it holds its slot instead of ``argv``.
+        """
+        job.queued = time.time()
         self.waiting.append(job.id)
         job.emit({"type": "queued", "position": self.position(job.id)})
-        asyncio.get_running_loop().create_task(self._run(job))
+        task = self._run(job) if work is None else self._run_work(job, work)
+        asyncio.get_running_loop().create_task(task)
 
     async def _acquire(self, job: Job) -> bool:
         lane = self.lane(job)
         slots = 1 if lane == "install" else self.max_parallel
         async with self.cond:
-            while True:
-                if job._cancel:
-                    if job.id in self.waiting:
+            try:
+                while True:
+                    if job._cancel:
+                        return False
+                    waiting = self._lane_ids(self.waiting, lane)
+                    if waiting and waiting[0] == job.id and len(self._lane_ids(self.running, lane)) < slots:
                         self.waiting.remove(job.id)
-                    return False
-                waiting = self._lane_ids(self.waiting, lane)
-                if waiting and waiting[0] == job.id and len(self._lane_ids(self.running, lane)) < slots:
+                        self.running.add(job.id)
+                        job.acquired = time.time()
+                        keep_awake(True)
+                        self.cond.notify_all()
+                        return True
+                    await self.cond.wait()
+            finally:
+                # Cancelled (or its task was) while waiting: never leave it blocking the lane.
+                if job.id in self.waiting:
                     self.waiting.remove(job.id)
-                    self.running.add(job.id)
-                    keep_awake(True)
                     self.cond.notify_all()
-                    return True
-                await self.cond.wait()
 
     async def _release(self, job: Job) -> None:
+        self.running.discard(job.id)  # before any await, so the slot is freed even if cancelled
+        if not self.running:
+            keep_awake(False)
         async with self.cond:
-            self.running.discard(job.id)
-            if not self.running:
-                keep_awake(False)
             self.cond.notify_all()
+
+    def _cancelled_before_start(self, job: Job) -> None:
+        job.state = "cancelled"
+        job.exit_code = -1
+        job.finished = time.time()
+        job.write_meta()
+        job.emit(exit_event(job, -1))
+
+    async def _run_work(self, job: Job, work: Work) -> None:
+        if not await self._acquire(job):
+            self._cancelled_before_start(job)
+            return
+        code = 1
+        try:
+            job.state = "running"
+            job.started = job._last_progress = time.time()
+            job.emit({"type": "started"})
+            try:
+                code = await work(job)
+            except Exception as exc:  # noqa: BLE001 - report everything to the client
+                job.emit({"type": "stderr", "data": f"PC Bridge: the {job.kind} job failed: {exc}\n"})
+                code = 1
+        finally:
+            job.exited = job.exited or time.time()
+            job.exit_code = code
+            job.finished = time.time()
+            job.state = "cancelled" if job._cancel else ("done" if code == 0 else "failed")
+            await self._release(job)
+        job.write_meta()
+        job.emit(exit_event(job, code))
 
     async def _run(self, job: Job) -> None:
         if not await self._acquire(job):
-            job.state = "cancelled"
-            job.finished = time.time()
-            job.emit({"type": "exit", "code": -1, "state": "cancelled"})
-            job.write_meta()
+            self._cancelled_before_start(job)
             return
         # Keep the slot until outputs are collected, so the next job can't mix its files in.
         # Installs write to Program Files, never to the shared folders: nothing to look for.
@@ -488,6 +560,7 @@ class JobQueue:
             except Exception as exc:  # noqa: BLE001 - report everything to the client
                 job.emit({"type": "stderr", "data": f"PC Bridge: failed to start job: {exc}\n"})
                 code = 1
+            job.exited = time.time()
 
             if stopped:
                 job.emit({"type": "stderr", "data": stopped})
@@ -515,15 +588,7 @@ class JobQueue:
         finally:
             await self._release(job)
         job.write_meta()
-        job.emit(
-            {
-                "type": "exit",
-                "code": code,
-                "state": job.state,
-                "duration": round(job.finished - job.started, 3),
-                "outputs": job.outputs,
-            }
-        )
+        job.emit(exit_event(job, code))
 
     @staticmethod
     def _install_result(job: Job, code: int) -> int:

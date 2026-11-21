@@ -288,7 +288,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 Ok(o) => {
                     let msg = format!(
                         "Worker Claude on the PC finished (exit {}, {:.0}s, {steps} events).\nJob folder on the PC: {}\n\nResult:\n{}",
-                        o.exit_code, o.duration, o.folder.unwrap_or_default(), o.result_text.unwrap_or_else(|| "(no result text)".into())
+                        o.exit_code, o.duration.unwrap_or(0.0), o.folder.unwrap_or_default(), o.result_text.unwrap_or_else(|| "(no result text)".into())
                     );
                     if o.exit_code == 0 {
                         text(msg)
@@ -353,7 +353,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                     last_lines(&log, 10)
                 )),
                 Ok(o) if o.exit_code == 0 => {
-                    text(format!("{program} is now installed on the PC ({:.0}s).\n\n{}", o.duration, last_lines(&log, 10)))
+                    text(format!("{program} is now installed on the PC ({:.0}s).\n\n{}", o.duration.unwrap_or(0.0), last_lines(&log, 10)))
                 }
                 Ok(o) => error(format!(
                     "Installing {program} on the PC failed (exit code {}). If Windows showed a \"Yes\" prompt on the PC, \
@@ -389,6 +389,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                             pc_queue_depth: st.as_ref().and_then(|s| s["queue_depth"].as_u64()).unwrap_or(0) as u32,
                             measured_mbps: engine.cfg.measured_mbps,
                             redirect_enabled: engine.cfg.redirect_enabled,
+                            signature: p.signature.clone(),
                         },
                         engine.history.as_ref(),
                     );

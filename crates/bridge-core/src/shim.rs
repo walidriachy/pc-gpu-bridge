@@ -5,7 +5,7 @@ use crate::config::BridgeConfig;
 use crate::detect::{self, Classification, JobKind};
 use crate::memory::{self, MemoryInfo};
 use crate::paths::{normalize, PathMapper};
-use crate::router::{self, Decision, History, RouteInput, Target};
+use crate::router::{self, Decision, History, JobRecord, RouteInput, Target};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -76,6 +76,23 @@ pub struct Plan {
     pub inputs: Vec<(PathBuf, String)>,
     pub class: Classification,
     pub input_bytes: u64,
+    /// See [`router::job_signature`].
+    pub signature: String,
+}
+
+/// Where the time of a PC job went, for the router's history.
+#[derive(Debug, Clone, Copy, Default)]
+struct PcTiming {
+    /// The agent's "duration": the process's own run time.
+    compute_secs: Option<f64>,
+    /// `compute_secs` excludes output collection (agents from 0.1.4).
+    exact: bool,
+    queue_secs: f64,
+    /// Sending inputs and waiting for outputs to come back.
+    transfer_secs: f64,
+    cached: bool,
+    /// From sending the job until its exit event.
+    stream_secs: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +220,8 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
             argv.extend(rewritten);
         }
     }
-    Ok(Plan { argv, cwd_rel, inputs, class, input_bytes })
+    let signature = router::job_signature(tool, args);
+    Ok(Plan { argv, cwd_rel, inputs, class, input_bytes, signature })
 }
 
 impl Engine {
@@ -238,6 +256,8 @@ impl Engine {
         None
     }
 
+    /// Run on the Mac. With `learn`, the run is one the router could have sent to the PC (it chose
+    /// the Mac, or the PC wasn't available), so its time is recorded for future decisions.
     fn local_fallback(
         &self,
         tool: &str,
@@ -245,16 +265,26 @@ impl Engine {
         cwd: &Path,
         reason: String,
         d: Option<Decision>,
+        learn: Option<&Plan>,
     ) -> ShimResult {
         let start = Instant::now();
         let code = (self.local)(tool, args, cwd);
+        let seconds = start.elapsed().as_secs_f64();
+        if let (Some(plan), Some(h)) = (learn, &self.history) {
+            let tool_l = tool.to_lowercase();
+            let name = format!("{tool} {}", args.join(" "));
+            let _ = h.record(&JobRecord {
+                signature: &plan.signature,
+                ..JobRecord::new(&tool_l, plan.class.kind, Target::Mac, plan.input_bytes, seconds, code, &name)
+            });
+        }
         ShimResult {
             exit_code: code,
             target: Target::Mac,
             reason,
             outputs: vec![],
             job_id: None,
-            seconds: start.elapsed().as_secs_f64(),
+            seconds,
             decision: d,
             missing: None,
         }
@@ -271,16 +301,16 @@ impl Engine {
     ) -> ShimResult {
         let tool_l = tool.to_lowercase();
         if force == Some(Target::Mac) {
-            return self.local_fallback(tool, args, cwd, "forced local".into(), None);
+            return self.local_fallback(tool, args, cwd, "forced local".into(), None, None);
         }
         if force.is_none() && detect::OPT_IN_TOOLS.contains(&tool_l.as_str()) {
             let opted = detect::project_opt_ins(cwd);
             if !opted.iter().any(|t| t == &tool_l) {
-                return self.local_fallback(tool, args, cwd, "project hasn't opted in (.pcbridge)".into(), None);
+                return self.local_fallback(tool, args, cwd, "project hasn't opted in (.pcbridge)".into(), None, None);
             }
         }
         if force.is_none() && !self.cfg.redirect_enabled {
-            return self.local_fallback(tool, args, cwd, "Redirecting is paused".into(), None);
+            return self.local_fallback(tool, args, cwd, "Redirecting is paused".into(), None, None);
         }
         let mapper = self.mapper();
         let plan = match plan(&mapper, &tool_l, args, cwd) {
@@ -299,11 +329,11 @@ impl Engine {
                         missing: None,
                     };
                 }
-                return self.local_fallback(tool, args, cwd, why, None);
+                return self.local_fallback(tool, args, cwd, why, None, None);
             }
         };
         if force.is_none() && plan.class.kind == JobKind::Light {
-            return self.local_fallback(tool, args, cwd, plan.class.reason.clone(), None);
+            return self.local_fallback(tool, args, cwd, plan.class.reason.clone(), None, None);
         }
 
         let Some((status, was_awake)) = self.ensure_awake(io) else {
@@ -323,7 +353,7 @@ impl Engine {
                     missing: None,
                 };
             }
-            return self.local_fallback(tool, args, cwd, why, None);
+            return self.local_fallback(tool, args, cwd, why, None, Some(&plan));
         };
 
         let mac_mem = self.mac_mem.clone().unwrap_or_else(memory::local_memory);
@@ -339,30 +369,41 @@ impl Engine {
                 pc_queue_depth: status["queue_depth"].as_u64().unwrap_or(0) as u32,
                 measured_mbps: self.cfg.measured_mbps,
                 redirect_enabled: true,
+                signature: plan.signature.clone(),
             },
             self.history.as_ref(),
         );
         if force.is_none() && decision.target == Target::Mac {
-            return self.local_fallback(tool, args, cwd, decision.reason.clone(), Some(decision));
+            return self.local_fallback(tool, args, cwd, decision.reason.clone(), Some(decision), Some(&plan));
         }
         match self.run_on_pc(&tool_l, &plan, io) {
             // The PC accepted the job: whatever happened there (including "program not installed on
             // the PC", reported in `r.missing`) is the result. It is never run again on the Mac.
-            Ok(mut r) => {
+            Ok((mut r, t)) => {
                 r.reason = decision.reason.clone();
                 r.decision = Some(decision);
                 if let Some(h) = &self.history {
-                    let _ = h.record(
-                        &tool_l,
-                        plan.class.kind,
-                        Target::Pc,
-                        plan.input_bytes,
-                        r.seconds,
-                        r.exit_code,
-                        &format!("{tool} {}", args.join(" ")),
-                        r.job_id.as_deref(),
-                        None,
-                    );
+                    let name = format!("{tool} {}", args.join(" "));
+                    // An agent that didn't report its run time: take the stream time minus the queue.
+                    let compute = t.compute_secs.unwrap_or((t.stream_secs - t.queue_secs).max(0.0));
+                    let _ = h.record(&JobRecord {
+                        signature: &plan.signature,
+                        compute_secs: compute,
+                        queue_secs: t.queue_secs,
+                        transfer_secs: t.transfer_secs,
+                        cached: t.cached,
+                        approx: !t.exact,
+                        pc_job_id: r.job_id.as_deref(),
+                        ..JobRecord::new(
+                            &tool_l,
+                            plan.class.kind,
+                            Target::Pc,
+                            plan.input_bytes,
+                            r.seconds,
+                            r.exit_code,
+                            &name,
+                        )
+                    });
                 }
                 r
             }
@@ -385,14 +426,15 @@ impl Engine {
                 if self.cfg.notify_on_fallback {
                     io.notify(&why);
                 }
-                self.local_fallback(tool, args, cwd, why, Some(decision))
+                self.local_fallback(tool, args, cwd, why, Some(decision), Some(&plan))
             }
         }
     }
 
-    fn run_on_pc(&self, tool: &str, plan: &Plan, io: &mut dyn ShimIo) -> Result<ShimResult, ClientError> {
+    fn run_on_pc(&self, tool: &str, plan: &Plan, io: &mut dyn ShimIo) -> Result<(ShimResult, PcTiming), ClientError> {
         let client = self.client.as_ref().ok_or_else(|| ClientError::Other("not paired".into()))?;
         let mapper = self.mapper();
+        let push_start = Instant::now();
         // Make sure inputs are on the PC (Syncthing may not have caught up yet).
         for (mac, rel) in &plan.inputs {
             let local_size = std::fs::metadata(mac).map(|m| m.len()).unwrap_or(0);
@@ -402,6 +444,7 @@ impl Engine {
                 client.push_file(mac, rel)?;
             }
         }
+        let push_secs = push_start.elapsed().as_secs_f64();
         let start = Instant::now();
         let req = RunRequest {
             argv: plan.argv.clone(),
@@ -433,20 +476,27 @@ impl Engine {
                     "[PC Bridge] lost the connection to the PC while the job was running ({e}). \
                      It may still finish there: see the Jobs tab.\n"
                 ));
-                return Ok(ShimResult {
-                    exit_code: 1,
-                    target: Target::Pc,
-                    reason: "connection to the PC lost during the job".into(),
-                    outputs: vec![],
-                    job_id: None,
-                    seconds: start.elapsed().as_secs_f64(),
-                    decision: None,
-                    missing: None,
-                });
+                let seconds = start.elapsed().as_secs_f64();
+                let timing = PcTiming { transfer_secs: push_secs, stream_secs: seconds, ..Default::default() };
+                return Ok((
+                    ShimResult {
+                        exit_code: 1,
+                        target: Target::Pc,
+                        reason: "connection to the PC lost during the job".into(),
+                        outputs: vec![],
+                        job_id: None,
+                        seconds,
+                        decision: None,
+                        missing: None,
+                    },
+                    timing,
+                ));
             }
             Err(e) => return Err(e),
         };
+        let stream_secs = start.elapsed().as_secs_f64();
         // Bring outputs back: give Syncthing a moment, then pull anything still missing/different.
+        let sync_start = Instant::now();
         let mut outputs = vec![];
         let deadline = Instant::now() + Duration::from_secs(self.cfg.sync_wait_secs);
         for rel in &outcome.outputs {
@@ -469,7 +519,15 @@ impl Engine {
                 std::thread::sleep(Duration::from_millis(250));
             }
         }
-        Ok(ShimResult {
+        let timing = PcTiming {
+            compute_secs: outcome.duration,
+            exact: outcome.exact_duration,
+            queue_secs: outcome.queue_secs.unwrap_or(0.0),
+            transfer_secs: push_secs + sync_start.elapsed().as_secs_f64(),
+            cached: outcome.cached,
+            stream_secs,
+        };
+        let result = ShimResult {
             exit_code: outcome.exit_code,
             target: Target::Pc,
             reason: String::new(),
@@ -478,7 +536,8 @@ impl Engine {
             seconds: start.elapsed().as_secs_f64(),
             decision: None,
             missing: outcome.missing,
-        })
+        };
+        Ok((result, timing))
     }
 }
 
@@ -626,5 +685,87 @@ mod tests {
         // forcing the PC while unreachable reports an error instead of running locally
         let r = e.run("ffmpeg", &s(&["-i", "a.mov", "b.mp4"]), dir.path(), Some(Target::Pc), &mut io);
         assert_eq!(r.exit_code, 3);
+    }
+
+    fn ok_local(_: &str, _: &[String], _: &Path) -> i32 {
+        0
+    }
+
+    fn learning_engine(dir: &Path, local: LocalRunner) -> Engine {
+        let mut cfg = BridgeConfig::default();
+        cfg.shared_folders.push(SharedFolder { mac_path: dir.display().to_string(), name: "w".into() });
+        cfg.notify_on_fallback = false;
+        Engine {
+            cfg,
+            client: None,
+            history: Some(History::in_memory().unwrap()),
+            mac_mem: None,
+            local,
+            wake_timeout: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn records_mac_runs_only_when_the_router_had_a_say() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mov"), vec![0u8; 4096]).unwrap();
+        let mut e = learning_engine(dir.path(), fake_local);
+        let enc = s(&["-i", "a.mov", "-c:v", "libx264", "b.mp4"]);
+        let mut io = Capture::default();
+        // Forced local, not opted in, light: the router never weighed these, so nothing is learned.
+        e.run("ffmpeg", &enc, dir.path(), Some(Target::Mac), &mut io);
+        e.run("npm", &s(&["run", "build"]), dir.path(), None, &mut io);
+        e.run("ffprobe", &s(&["-version"]), dir.path(), None, &mut io);
+        e.cfg.redirect_enabled = false;
+        e.run("ffmpeg", &enc, dir.path(), None, &mut io);
+        assert!(e.history.as_ref().unwrap().recent(10).is_empty());
+        // The PC was out of reach: the Mac run is what the router would have compared against.
+        e.cfg.redirect_enabled = true;
+        let r = e.run("ffmpeg", &enc, dir.path(), None, &mut io);
+        assert_eq!((r.target, r.exit_code), (Target::Mac, 42));
+        let rows = e.history.as_ref().unwrap().recent(10);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!((row["target"].as_str(), row["tool"].as_str()), (Some("mac"), Some("ffmpeg")));
+        assert_eq!((row["input_bytes"].as_i64(), row["exit_code"].as_i64()), (Some(4096), Some(42)));
+        assert_eq!(row["signature"], "ffmpeg:libx264");
+        assert_eq!(row["cached"], false);
+        assert!(row["compute_secs"].as_f64().unwrap() >= 0.0);
+    }
+
+    #[test]
+    fn mac_runs_change_the_next_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mov"), vec![0u8; 1 << 20]).unwrap();
+        let e = learning_engine(dir.path(), ok_local);
+        let enc = s(&["-i", "a.mov", "-c:v", "libx264", "b.mp4"]);
+        let big_encode = RouteInput {
+            tool: "ffmpeg".into(),
+            class: Classification { kind: JobKind::Gpu, est_ram_bytes: 1 << 30, reason: "test".into() },
+            input_bytes: 2 << 30,
+            mac_mem: MemoryInfo {
+                total_bytes: 16 << 30,
+                available_bytes: 8 << 30,
+                used_percent: 50.0,
+                pressure: crate::memory::Pressure::Normal,
+            },
+            pc_free_ram: Some(28 << 30),
+            pc_reachable: true,
+            pc_awake: true,
+            pc_queue_depth: 0,
+            measured_mbps: 900.0,
+            redirect_enabled: true,
+            signature: router::job_signature("ffmpeg", &enc),
+        };
+        let mut io = Capture::default();
+        for n in 0..3 {
+            let d = router::decide(&big_encode, e.history.as_ref());
+            assert_eq!(d.target, Target::Pc, "defaults until 3 Mac runs are known (have {n})");
+            e.run("ffmpeg", &enc, dir.path(), None, &mut io);
+        }
+        // This Mac turned out to encode almost instantly: the router now keeps the job local.
+        let d = router::decide(&big_encode, e.history.as_ref());
+        assert_eq!(d.target, Target::Mac, "{d:?}");
+        assert_eq!(d.mac_est_secs, 5.0);
     }
 }

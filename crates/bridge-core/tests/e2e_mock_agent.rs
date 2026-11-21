@@ -29,6 +29,8 @@ enum RunMode {
     Missing,
     /// The PC refuses before accepting the job (HTTP 500, no events).
     Refuse,
+    /// A newer agent answers from its result cache, saying so in the exit event.
+    Cached,
 }
 
 fn start_mock() -> (String, Arc<Mutex<Seen>>) {
@@ -178,12 +180,24 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                             ]),
                         )
                     }
+                    ("POST", "/run") if mode == RunMode::Cached => {
+                        seen.lock().unwrap().run_bodies.push(serde_json::from_slice(&body).unwrap());
+                        (
+                            "application/x-ndjson",
+                            ndjson(&[
+                                json!({"type": "job", "id": "c1", "folder": r"D:\PCBridge\jobs\c"}),
+                                json!({"type": "exit", "code": 0, "state": "done", "duration": 0, "queue_secs": 0,
+                                       "cached": true, "outputs": ["workspace/w/out.mp4"]}),
+                            ]),
+                        )
+                    }
                     ("POST", "/run") => {
                         seen.lock().unwrap().run_bodies.push(serde_json::from_slice(&body).unwrap());
+                        // Agent 0.1.3: no queue_secs in the exit event, only event timestamps.
                         let evs = [
-                            json!({"type": "job", "id": "abc123", "folder": r"D:\PCBridge\jobs\x"}),
-                            json!({"type": "queued", "position": 1}),
-                            json!({"type": "started"}),
+                            json!({"type": "job", "id": "abc123", "folder": r"D:\PCBridge\jobs\x", "t": 99.9}),
+                            json!({"type": "queued", "position": 1, "t": 100.0}),
+                            json!({"type": "started", "t": 100.75}),
                             json!({"type": "stderr", "data": "Output #0, mp4, to 'D:\\PCBridge\\workspace\\w\\out.mp4':\n"}),
                             json!({"type": "exit", "code": 0, "state": "done", "duration": 1.5, "outputs": ["workspace/w/out.mp4"]}),
                         ];
@@ -408,6 +422,114 @@ fn install_programs_through_client_and_mcp() {
     let r = bridge_core::mcp::call_tool(&engine, "pc_status", &json!({}));
     let t = r["content"][0]["text"].as_str().unwrap();
     assert!(t.contains("Programs on the PC: installed: ffmpeg, node · not installed: blender"), "{t}");
+}
+
+fn learning_engine(url: &str, dir: &std::path::Path, local: bridge_core::shim::LocalRunner) -> Engine {
+    let mut e = engine_for(url, dir, local);
+    e.history = Some(bridge_core::router::History::in_memory().unwrap());
+    e
+}
+
+#[test]
+fn pc_rows_store_agent_compute_time_and_steer_the_router() {
+    let (url, seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    let engine = learning_engine(&url, dir.path(), |_, _, _| 0);
+    let a = args(&["-i", "in.mov", "-c:v", "libx264", "out.mp4"]);
+    for _ in 0..3 {
+        let r = engine.run("ffmpeg", &a, dir.path(), None, &mut Capture::default());
+        assert_eq!(r.target, Target::Pc, "defaults send it to the PC: {}", r.reason);
+    }
+    let h = engine.history.as_ref().unwrap();
+    for row in h.recent(3) {
+        assert_eq!(row["target"], "pc");
+        assert_eq!(row["signature"], "ffmpeg:libx264");
+        assert_eq!(row["pc_job_id"], "abc123");
+        // The agent's run time, not the Mac-side round trip.
+        assert_eq!(row["compute_secs"].as_f64(), Some(1.5));
+        assert!((row["queue_secs"].as_f64().unwrap() - 0.75).abs() < 1e-9, "{row}");
+        assert!(row["transfer_secs"].as_f64().unwrap() >= 0.0);
+        assert_eq!(row["cached"], false);
+        // Agent 0.1.3's duration also counts collecting outputs: kept, but only as an upper bound.
+        assert_eq!(row["approx"], true);
+    }
+    // A tiny input is billed as 1 MB, the same as decide() bills it: 1.5 s/MB, not 1500.
+    assert_eq!(h.secs_per_mb("ffmpeg", "ffmpeg:libx264", Target::Pc), Some(1.5));
+    let r = engine.run("ffmpeg", &a, dir.path(), None, &mut Capture::default());
+    assert_eq!(r.target, Target::Pc, "{}", r.reason);
+    let d = r.decision.unwrap();
+    assert!(d.pc_est_secs < 5.0 && d.pc_est_secs < d.mac_est_secs, "{d:?}");
+    // The Mac turned out much faster for this exact job: after 3 Mac runs the router keeps it local.
+    for _ in 0..3 {
+        h.record(&bridge_core::router::JobRecord {
+            signature: "ffmpeg:libx264",
+            ..bridge_core::router::JobRecord::new(
+                "ffmpeg",
+                bridge_core::detect::JobKind::Gpu,
+                Target::Mac,
+                13,
+                0.01,
+                0,
+                "ffmpeg",
+            )
+        })
+        .unwrap();
+        h.record(&bridge_core::router::JobRecord {
+            signature: "ffmpeg:libx264",
+            transfer_secs: 9.0,
+            ..bridge_core::router::JobRecord::new(
+                "ffmpeg",
+                bridge_core::detect::JobKind::Gpu,
+                Target::Pc,
+                13,
+                1.5,
+                0,
+                "ffmpeg",
+            )
+        })
+        .unwrap();
+    }
+    let r = engine.run("ffmpeg", &a, dir.path(), None, &mut Capture::default());
+    assert_eq!((r.target, r.exit_code), (Target::Mac, 0), "{}", r.reason);
+    assert_eq!(seen.lock().unwrap().run_bodies.len(), 4);
+    let mac = &h.recent(1)[0];
+    // Same input measure as the router: in.mov plus the out.mp4 the earlier runs brought back.
+    assert_eq!((mac["target"].as_str(), mac["input_bytes"].as_i64()), (Some("mac"), Some(13)));
+    assert_eq!((mac["signature"].as_str(), mac["approx"].as_bool()), (Some("ffmpeg:libx264"), Some(false)));
+}
+
+#[test]
+fn cache_hits_are_kept_but_not_learned() {
+    let (url, _seen) = start_mock_with(RunMode::Cached);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    let engine = learning_engine(&url, dir.path(), |_, _, _| panic!("cache hits stay on the PC"));
+    let a = args(&["-i", "in.mov", "-c:v", "libx264", "out.mp4"]);
+    for _ in 0..4 {
+        let r = engine.run("ffmpeg", &a, dir.path(), None, &mut Capture::default());
+        assert_eq!((r.target, r.exit_code), (Target::Pc, 0), "{}", r.reason);
+    }
+    let h = engine.history.as_ref().unwrap();
+    let rows = h.recent(10);
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|r| r["cached"] == true && r["queue_secs"].as_f64() == Some(0.0)), "{rows:?}");
+    // This agent sends queue_secs, so its duration is exact compute time.
+    assert!(rows.iter().all(|r| r["approx"] == false), "{rows:?}");
+    assert_eq!(h.secs_per_mb("ffmpeg", "ffmpeg:libx264", Target::Pc), None);
+}
+
+#[test]
+fn refused_pc_job_is_learned_as_a_mac_run() {
+    let (url, _seen) = start_mock_with(RunMode::Refuse);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    let engine = learning_engine(&url, dir.path(), |_, _, _| 0);
+    let r = engine.run("ffmpeg", &args(&["-i", "in.mov", "out.mp4"]), dir.path(), None, &mut Capture::default());
+    assert_eq!(r.target, Target::Mac);
+    let rows = engine.history.as_ref().unwrap().recent(10);
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0]["target"].as_str(), rows[0]["signature"].as_str()), (Some("mac"), Some("ffmpeg")));
 }
 
 /// Optional cross-language test against the REAL Python agent. CI starts the agent and sets:

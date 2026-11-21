@@ -27,13 +27,18 @@ from .cache import ResultCache, cache_key
 from .cleanup import cleanup_old
 from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path
 from .gpu import query_gpus
-from .jobs import TERMINAL, Job, JobQueue
+from .jobs import TERMINAL, Job, JobQueue, exit_event
 from .memory import memory_info
 from .pairing import PairingStore
 from .syncthing import Syncthing, SyncthingError, folder_id
 
 TOOLS = ("ffmpeg", "ffprobe", "python", "claude", "blender", "docker", "node", "npm", "pnpm", "ollama", "git")
 TORCH_CHECK_S = 60.0  # how long /status reuses its "is PyTorch installed?" answer
+COMFY_URL = "http://127.0.0.1:8188"
+COMFY_POLL_S = 1.0
+COMFY_STOP_WAIT_S = 30.0  # after a timeout or cancel, how long to wait for ComfyUI to let go of the GPU
+# How long ComfyUI may keep failing to answer (busy loading a model, a bad reply) before we give up.
+COMFY_UNANSWERED_S = 120.0
 
 
 class InstallRequest(BaseModel):
@@ -90,7 +95,43 @@ def _http_json(url: str, body: dict | None = None, timeout: float = 600) -> Any:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - localhost only
-        return json.loads(r.read().decode())
+        raw = r.read().decode()
+    return json.loads(raw) if raw.strip() else None  # ComfyUI answers some POSTs with no body
+
+
+def _comfy_running(base: str, pid: str) -> bool:
+    q = _http_json(f"{base}/queue", None, 10) or {}
+    return any(len(item) > 1 and item[1] == pid for item in q.get("queue_running", []))
+
+
+def _comfy_stop(base: str, pid: str, wait: float) -> None:
+    """Best effort: drop our prompt from ComfyUI's queue, or interrupt it and wait until it stops.
+
+    Blocking: run it in a worker thread. Only our prompt is touched, never someone else's.
+    """
+    try:
+        if not _comfy_running(base, pid):
+            _http_json(f"{base}/queue", {"delete": [pid]}, 10)
+            return
+        _http_json(f"{base}/interrupt", {"prompt_id": pid}, 10)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and _comfy_running(base, pid):
+            time.sleep(COMFY_POLL_S)
+    except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
+def _comfy_error(entry: dict) -> str | None:
+    """ComfyUI's own error message when a prompt failed, else None."""
+    status = entry.get("status") or {}
+    if status.get("status_str") != "error":
+        return None
+    for msg in status.get("messages") or []:
+        if isinstance(msg, list) and len(msg) > 1 and msg[0] == "execution_error":
+            data = msg[1] if isinstance(msg[1], dict) else {}
+            node = data.get("node_type") or data.get("node_id") or "a node"
+            return f"{node}: {data.get('exception_message', 'unknown error')}".strip()
+    return "the workflow failed"
 
 
 class WarmModels:
@@ -300,11 +341,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 job.cached = True
                 job.state = "done"
                 job.exit_code = 0
-                job.started = job.finished = time.time()
+                job.started = job.exited = job.finished = time.time()
                 job.outputs = restored
                 job.write_meta()
                 job.emit({"type": "cached", "outputs": restored})
-                job.emit({"type": "exit", "code": 0, "state": "done", "duration": 0, "outputs": restored})
+                job.emit(exit_event(job, 0))
                 return await _finish(job, req.stream)
             pending_cache[job.id] = key
         await queue.submit(job)
@@ -462,6 +503,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(503, str(exc)) from exc
 
     # ---- optional local AI tools ------------------------------------------
+    # Ollama chats don't take the GPU slot: a reply would wait behind an hour-long render, and Ollama
+    # fits (or partly offloads) models to the VRAM that is free by itself.
     @app.post("/ollama/chat", dependencies=[Depends(auth)])
     async def ollama_chat(req: OllamaChat):
         evicted = warm.touch(req.model)
@@ -486,32 +529,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/comfy/generate", dependencies=[Depends(auth)])
     async def comfy_generate(req: ComfyRequest):
-        base = "http://127.0.0.1:8188"
-        try:
-            sub = await asyncio.to_thread(_http_json, f"{base}/prompt", {"prompt": req.workflow}, 30)
-        except (urllib.error.URLError, OSError) as exc:
+        """Run a ComfyUI workflow while holding a GPU slot, like any other GPU job.
+
+        The job runs in the background (it keeps its place if the client goes away), and this
+        request waits for it. ``timeout`` counts from when the workflow reaches ComfyUI.
+        """
+        base = COMFY_URL
+        try:  # before queueing, so nobody waits an hour to hear ComfyUI isn't there
+            await asyncio.to_thread(_http_json, f"{base}/system_stats", None, 10)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
             raise HTTPException(503, f"ComfyUI is not running on the PC: {exc}") from exc
-        pid = sub.get("prompt_id")
         job = queue.create("comfy", "comfy-generate", ["comfyui"], root / "workspace", gpu=True)
-        deadline = time.time() + req.timeout
-        while time.time() < deadline:
-            hist = await asyncio.to_thread(_http_json, f"{base}/history/{pid}", None, 30)
-            if pid in hist:
-                saved = []
-                for node in hist[pid].get("outputs", {}).values():
-                    for img in node.get("images", []):
-                        q = urllib.parse.urlencode(img)
-                        dest = job.folder / "output" / img["filename"]
-                        await asyncio.to_thread(urllib.request.urlretrieve, f"{base}/view?{q}", dest)
-                        saved.append(dest.relative_to(root).as_posix())
-                job.outputs, job.state, job.exit_code = saved, "done", 0
-                job.finished = time.time()
-                job.write_meta()
-                job.emit({"type": "exit", "code": 0, "state": "done", "outputs": saved})
-                return job.summary()
-            await asyncio.sleep(1)
-        job.state = "failed"
-        job.emit({"type": "exit", "code": 1, "state": "failed"})
-        raise HTTPException(504, "ComfyUI did not finish in time")
+        problem: list[tuple[int, str]] = []
+
+        def fail(status: int, detail: str) -> int:
+            problem.append((status, detail))
+            job.emit({"type": "stderr", "data": f"PC Bridge: {detail}\n"})
+            return 1
+
+        async def work(job: Job) -> int:
+            try:
+                sub = await asyncio.to_thread(_http_json, f"{base}/prompt", {"prompt": req.workflow}, 30)
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", "replace")[:500]
+                return fail(503, f"ComfyUI refused the workflow (HTTP {exc.code}): {body}")
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                return fail(503, f"ComfyUI is not running on the PC: {exc}")
+            pid = (sub or {}).get("prompt_id")
+            if not pid:
+                return fail(503, f"ComfyUI did not accept the workflow: {sub}")
+            job.emit({"type": "stdout", "data": f"ComfyUI prompt {pid} queued\n"})
+            deadline = time.monotonic() + req.timeout
+            unanswered_since: float | None = None
+            while not job._cancel:
+                if time.monotonic() >= deadline:
+                    await asyncio.to_thread(_comfy_stop, base, pid, COMFY_STOP_WAIT_S)
+                    return fail(504, "ComfyUI did not finish in time")
+                try:
+                    hist = await asyncio.to_thread(_http_json, f"{base}/history/{pid}", None, 30) or {}
+                except (urllib.error.URLError, OSError, ValueError) as exc:
+                    # The prompt may still be running: one missed answer must not free the GPU slot.
+                    now = time.monotonic()
+                    unanswered_since = unanswered_since or now
+                    if now - unanswered_since < COMFY_UNANSWERED_S:
+                        await asyncio.sleep(COMFY_POLL_S)
+                        continue
+                    await asyncio.to_thread(_comfy_stop, base, pid, COMFY_STOP_WAIT_S)
+                    return fail(503, f"ComfyUI stopped answering: {exc}")
+                unanswered_since = None
+                if pid in hist:
+                    job.exited = time.time()  # saving the images below is output collection
+                    error = _comfy_error(hist[pid])
+                    if error:
+                        job.emit({"type": "stderr", "data": f"ComfyUI: {error}\n"})
+                        return 1
+                    for node in hist[pid].get("outputs", {}).values():
+                        for img in node.get("images", []):
+                            q = urllib.parse.urlencode(img)
+                            dest = job.folder / "output" / Path(img["filename"]).name
+                            await asyncio.to_thread(urllib.request.urlretrieve, f"{base}/view?{q}", dest)
+                            job.outputs.append(dest.relative_to(root).as_posix())
+                    return 0
+                await asyncio.sleep(COMFY_POLL_S)
+            await asyncio.to_thread(_comfy_stop, base, pid, COMFY_STOP_WAIT_S)
+            return -1
+
+        await queue.submit(job, work)
+        async for _ in job.follow():
+            pass
+        if problem:
+            raise HTTPException(*problem[0])
+        return job.summary()
 
     return app

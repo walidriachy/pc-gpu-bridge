@@ -82,13 +82,14 @@ sequenceDiagram
     E->>A: POST /files/push (only inputs not yet synced)
     E->>A: POST /run (argv rewritten to h264_nvenc and PC paths)
     A->>A: cache hit? then replay result
-    A->>G: run in queue (1 GPU slot, FIFO)
+    A->>G: run in queue (1 GPU slot, FIFO, shared with ComfyUI)
     A-->>E: NDJSON stream: queued · started · stdout · stderr · exit
     E->>A: GET /files/pull (new outputs)
     E-->>C: same output + exit code, paths shown as Mac paths
-    E->>E: record timing in history.sqlite
+    E->>E: record compute, queue and transfer time in history.sqlite
   else Mac is faster, PC unreachable, or redirect paused
     E->>E: run the real tool locally (PCBRIDGE_LOCAL=1)
+    E->>E: record the Mac time in history.sqlite (if the router weighed it)
     E-->>C: output + exit code (+ notification if it was a fallback)
   end
 ```
@@ -153,10 +154,19 @@ flowchart TD
   T -- no --> MAC
 ```
 
-* **Transfer time** = 2 × size (MB) × 8 ÷ measured Mbps (inputs up, outputs back).
+* **Size** is counted as at least 1 MB, both in estimates and when learning rates, so small jobs cost their fixed time.
+* **Transfer time** = 2 × size (MB) × 8 ÷ measured Mbps (inputs up, outputs back), or the PC's measured overhead for this job (pushing inputs, waiting for outputs to sync) if that is larger.
 * **Queue** = jobs waiting × 60 s. **Wake** = 25 s if the PC was asleep.
 * **Swap penalty** on the Mac time: ×1.5 when memory pressure is *warn*, ×3 when it is *critical*.
-* **Speed-ups** start from defaults (ffmpeg 4×, Blender 5×, ComfyUI 8×, GPU Python 6×, RAM-heavy 1.3×). Once a tool has 3 or more past runs, the median seconds-per-MB of its last 20 runs replaces the default.
+* **Speed-ups** start from defaults (ffmpeg 4×, Blender 5×, ComfyUI 8×, GPU Python 6×, RAM-heavy 1.3×).
+
+### Learning from history
+
+Every job the router weighed is stored in `history.sqlite`: Mac runs (the router chose the Mac, the PC was out of reach, or the PC refused the job) and PC runs. A PC row keeps the agent's `duration` (compute time only) apart from `queue_secs` and the Mac-measured `transfer_secs`, so the estimate adds queue, transfer and wake exactly once. Each row also has a **signature** such as `python:train.py`, `ffmpeg:libx264`, `blender:render`, `npm:build` or `ollama:llama3`.
+
+* A learned rate is the recency-weighted median (each older run weighs 0.85 of the next) of seconds per MB over the last 20 successful runs. It needs 3 runs.
+* **Both sides describe the same jobs.** If either side has 3 runs of this signature, only signature rates are used; a side without them uses the default (the PC's default is the Mac rate ÷ speed-up). Otherwise tool-wide rates are taken over signatures both sides have run, or from one side when the other has nothing for the tool.
+* Not learned: failed runs, cache hits, and PC rows from before 0.1.4 (they held the whole round trip). A PC with agent 0.1.3 sends no `queue_secs`; its `duration` also covers collecting outputs, so those rows are marked approximate and only used until 3 exact ones exist.
 
 ### How jobs are classified
 

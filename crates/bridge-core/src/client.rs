@@ -37,8 +37,15 @@ pub struct JobOutcome {
     pub job_id: Option<String>,
     pub exit_code: i32,
     pub outputs: Vec<String>,
+    /// The PC answered from its result cache without running anything.
     pub cached: bool,
-    pub duration: f64,
+    /// Seconds the job's process ran on the PC (not queue time); None if the agent didn't say.
+    pub duration: Option<f64>,
+    /// Seconds the job waited for a slot on the PC; None if unknown.
+    pub queue_secs: Option<f64>,
+    /// The agent said `duration` is compute time only. Agents before 0.1.4 (no `queue_secs` in the
+    /// exit event) also count scanning and copying the outputs.
+    pub exact_duration: bool,
     pub folder: Option<String>,
     pub result_text: Option<String>,
     /// Catalog key (e.g. "ffmpeg") of a program the job needed but the PC doesn't have.
@@ -147,6 +154,8 @@ impl AgentClient {
         let r = self.req(reqwest::Method::POST, path).json(body).send().map_err(map_err)?;
         let r = Self::check(r)?;
         let mut out = JobOutcome { exit_code: -1, ..Default::default() };
+        // PC-clock timestamps, for agents that don't report queue time themselves.
+        let (mut queued_t, mut started_t) = (None, None);
         for line in BufReader::new(r).lines() {
             let line = line.map_err(|e| ClientError::Unreachable(format!("connection dropped: {e}")))?;
             if line.trim().is_empty() {
@@ -158,6 +167,8 @@ impl AgentClient {
                     out.job_id = ev["id"].as_str().map(String::from);
                     out.folder = ev["folder"].as_str().map(String::from);
                 }
+                "queued" => queued_t = queued_t.or(ev["t"].as_f64()),
+                "started" => started_t = ev["t"].as_f64(),
                 "cached" => out.cached = true,
                 "missing" => out.missing = ev["program"].as_str().map(String::from),
                 "restart_needed" => out.restart_needed = true,
@@ -168,7 +179,10 @@ impl AgentClient {
                 }
                 "exit" => {
                     out.exit_code = ev["code"].as_i64().unwrap_or(-1) as i32;
-                    out.duration = ev["duration"].as_f64().unwrap_or(0.0);
+                    out.duration = ev["duration"].as_f64();
+                    out.queue_secs = ev["queue_secs"].as_f64();
+                    out.exact_duration = out.duration.is_some() && out.queue_secs.is_some();
+                    out.cached |= ev["cached"].as_bool() == Some(true);
                     out.outputs = ev["outputs"]
                         .as_array()
                         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -177,6 +191,11 @@ impl AgentClient {
                 _ => {}
             }
             on_event(&ev);
+        }
+        if out.queue_secs.is_none() {
+            if let (Some(q), Some(s)) = (queued_t, started_t) {
+                out.queue_secs = Some((s - q).max(0.0));
+            }
         }
         if out.exit_code == -1 && out.job_id.is_some() {
             return Err(ClientError::Unreachable("the connection to the PC ended before the job finished".into()));

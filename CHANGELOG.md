@@ -4,6 +4,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+- **The router now really learns from both machines.** Every time a heavy job runs, PC Bridge writes down how long it took, on the Mac or on the PC, and uses that to choose next time. Before, it only remembered PC jobs, and it counted the whole trip there and back (sending files, waiting in line, bringing results back) as if it were the PC's work, so the PC looked slower than it is. Now it keeps the PC's real working time apart from the waiting and the file transfers, and adds those once.
+- It tells jobs apart: `python train.py` and `python tiny.py` are learned separately, as are different ffmpeg codecs, Blender scripts, npm scripts and Ollama models. The Mac's and the PC's numbers are only compared when they come from the same kind of job, and recent runs count more than old ones.
+- Small jobs (inputs under 1 MB) were estimated up to 1000 times too long once they had been learned. They are now measured the same way they are estimated.
+- Results the PC already had (from its result cache) and failed jobs aren't learned from. Your existing history is kept and upgraded on first start; old PC timings, which included the round trip, are no longer used for learning.
+- **ComfyUI images wait their turn for the graphics card.** A ComfyUI image job now takes the same single GPU slot as a render or a PyTorch job, so two of them no longer run on the graphics card at the same time and run out of memory. While it waits, it shows in the queue like any other job and can be cancelled. If ComfyUI is busy for a moment and doesn't answer, PC Bridge keeps waiting instead of handing the card to the next job; if it stops answering for 2 minutes, PC Bridge stops our image and only then frees the card.
+- The PC's job summary now says how long a job waited in line (`queue_secs`) and whether it came from the cache (`cached`). `duration` is now only the time the program itself ran, not the time spent collecting its results.
+
+### Fixed
+- A ComfyUI image that failed inside ComfyUI (for example, the graphics card ran out of memory) is now reported as failed instead of "done" with no images.
+
 ## [0.1.3] — 2026-11-21
 
 ### Added
