@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -422,3 +423,57 @@ def test_forget_and_remove(tmp_path):
     assert store.remove(0) and not store.verify(b)
     assert not store.remove(0)
     assert store.is_local(store.local_token()) and not store.is_local(b) and not store.is_local(None)
+
+
+def test_cancel_stops_child_processes_too(tmp_path):
+    """powershell/npm/claude start the real work as a child: Cancel must stop it as well."""
+    pidfile = tmp_path / "child.pid"
+    parent = (
+        "import subprocess, sys, time\n"
+        "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(c.pid))\n"
+        "time.sleep(60)\n"
+    )
+
+    def alive(pid: int) -> bool:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+            return str(pid) in out
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        # A killed child may linger as a zombie until reaped; treat that as stopped.
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                return f.read().split()[2] != "Z"
+        except OSError:
+            r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+            return bool(r.stdout.strip()) and not r.stdout.strip().startswith("Z")
+
+    async def main():
+        q = JobQueue(tmp_path)
+        job = q.create("run", "tree", [sys.executable, "-c", parent], tmp_path)
+        await q.submit(job)
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text():
+                break
+            await asyncio.sleep(0.1)
+        child = int(pidfile.read_text())
+        assert alive(child)
+        assert await q.cancel(job.id)
+
+        async def drain():
+            async for _ in job.follow():
+                pass
+
+        # Before the fix the job only ended when the orphaned child finished (60 s).
+        await asyncio.wait_for(drain(), 10)
+        assert job.state == "cancelled"
+        for _ in range(50):
+            if not alive(child):
+                break
+            await asyncio.sleep(0.1)
+        assert not alive(child), "the child process kept running after Cancel"
+
+    asyncio.run(main())

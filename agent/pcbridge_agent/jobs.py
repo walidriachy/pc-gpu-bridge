@@ -17,6 +17,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import sys
 import time
 import uuid
@@ -383,6 +384,39 @@ def changed_files(before: dict[str, int], after: dict[str, int], started: float)
     return [Path(p) for p, m in after.items() if before.get(p) != m and m >= since]
 
 
+async def kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Stop a job's process and everything it started.
+
+    Killing only the top process isn't enough: ``powershell -Command``, ``npm.cmd`` and ``claude``
+    start the real work (ffmpeg, node, …) as child processes, which would keep running on the GPU
+    and keep the job's output open. Windows: ``taskkill /T /F``. Elsewhere the job runs in its own
+    session, so its whole process group is killed.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name == "nt":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(proc.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), 15)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (TimeoutError, OSError):
+        pass
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
 class JobQueue:
     def __init__(self, root: Path, max_parallel: int = 1):
         self.root = Path(root).resolve()
@@ -530,6 +564,8 @@ class JobQueue:
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    # Own process group, so Cancel can stop the job's children too.
+                    start_new_session=os.name != "nt",
                 )
                 watch = asyncio.get_running_loop().create_task(self._watch(job)) if install else None
                 try:
@@ -645,10 +681,7 @@ class JobQueue:
                         }
                     )
                 continue
-            try:
-                job._proc.kill()
-            except ProcessLookupError:
-                pass
+            await kill_tree(job._proc)
             return why
         return ""
 
@@ -709,10 +742,7 @@ class JobQueue:
             return False
         job._cancel = True
         if job._proc and job._proc.returncode is None:
-            try:
-                job._proc.kill()
-            except ProcessLookupError:
-                pass
+            await kill_tree(job._proc)
         async with self.cond:
             self.cond.notify_all()
         return True

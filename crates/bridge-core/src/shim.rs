@@ -95,6 +95,25 @@ struct PcTiming {
     stream_secs: f64,
 }
 
+/// The PC job this process is currently following, so Ctrl-C can stop it on the PC too.
+static RUNNING_JOB: std::sync::Mutex<Option<(AgentClient, String)>> = std::sync::Mutex::new(None);
+
+/// Ctrl-C (or Claude stopping a command) used to stop only the Mac side and leave the job running
+/// on the PC. Now the PC job is cancelled first, then this process exits as usual (code 130).
+fn watch_ctrl_c() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = ctrlc::set_handler(|| {
+            let job = RUNNING_JOB.lock().ok().and_then(|g| g.clone());
+            if let Some((client, id)) = job {
+                let _ = client.cancel(&id);
+                eprintln!("\n[PC Bridge] stopped the job on the PC");
+            }
+            std::process::exit(130);
+        });
+    });
+}
+
 /// The PC is on but didn't accept this Mac's pairing key.
 pub const KEY_REFUSED: &str =
     "The PC didn't accept this Mac's pairing key. Pair again: on the Mac open PC Bridge → Settings → Run setup again";
@@ -528,9 +547,15 @@ impl Engine {
         };
         // Once the PC has accepted the job, never run it a second time on the Mac.
         let mut accepted = false;
+        watch_ctrl_c();
         let result = client.run(&req, |ev| {
             accepted = true;
             match ev["type"].as_str() {
+                Some("job") => {
+                    if let (Ok(mut g), Some(id)) = (RUNNING_JOB.lock(), ev["id"].as_str()) {
+                        *g = Some((client.clone(), id.to_string()));
+                    }
+                }
                 Some("stdout") => io.out(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
                 Some("stderr") => io.err(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
                 Some("queued") if ev["position"].as_u64().unwrap_or(0) > 1 => {
@@ -540,6 +565,9 @@ impl Engine {
                 _ => {}
             }
         });
+        if let Ok(mut g) = RUNNING_JOB.lock() {
+            *g = None;
+        }
         let outcome = match result {
             Ok(o) => o,
             Err(e) if accepted => {
