@@ -83,11 +83,13 @@ impl PathMapper {
         }
         let name = parts.next()?;
         let f = self.folders.iter().find(|f| f.name == name)?;
-        let mut p = PathBuf::from(&f.mac_path);
+        // Mac paths are always POSIX, whatever OS this code is compiled for.
+        let mut p = f.mac_path.trim_end_matches('/').to_string();
         for part in parts.filter(|s| !s.is_empty()) {
-            p.push(part);
+            p.push('/');
+            p.push_str(part);
         }
-        Some(p)
+        Some(PathBuf::from(p))
     }
 
     /// Absolute PC path (`D:\PCBridge\workspace\...`) -> Mac path.
