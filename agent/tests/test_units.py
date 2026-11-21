@@ -477,3 +477,22 @@ def test_cancel_stops_child_processes_too(tmp_path):
         assert not alive(child), "the child process kept running after Cancel"
 
     asyncio.run(main())
+
+
+def test_jobs_list_survives_a_restart(tmp_path):
+    from pcbridge_agent.jobs import JobQueue
+
+    q = JobQueue(tmp_path)
+    done = q.create("run", "ffmpeg", ["ffmpeg", "-version"], tmp_path)
+    done.state, done.exit_code, done.started, done.finished = "done", 0, 100.0, 103.5
+    done.write_meta()
+    stuck = q.create("run", "blender", ["blender", "-b"], tmp_path)
+    stuck.state = "running"
+    stuck.write_meta()
+
+    fresh = JobQueue(tmp_path)
+    assert fresh.load_history() == 2
+    assert fresh.jobs[done.id].state == "done"
+    assert fresh.jobs[done.id].duration() == 3.5
+    assert fresh.jobs[stuck.id].state == "interrupted"
+    assert fresh.load_history() == 0  # loading twice adds nothing

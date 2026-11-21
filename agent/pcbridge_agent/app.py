@@ -164,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     pairing.ensure_code()
     pairing.local_token()
     queue = JobQueue(root, settings.max_parallel_jobs)
+    queue.load_history()  # the Jobs list survives restarts
     cache = ResultCache(root / "cache", root, int(settings.cache_max_gb * 1024**3))
     warm = WarmModels()
     pending_cache: dict[str, str] = {}

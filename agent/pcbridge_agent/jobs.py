@@ -29,7 +29,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from . import programs
 from .config import looks_absolute, system_path
 
-TERMINAL = {"done", "failed", "cancelled"}
+TERMINAL = {"done", "failed", "cancelled", "interrupted"}  # interrupted: the agent restarted mid-job
 
 # Installs: the longest one may take, and (winget only) how long it may show no progress before
 # PC Bridge says Windows may be waiting for a "Yes" click, then gives up. pip prints nothing while
@@ -446,6 +446,56 @@ class JobQueue:
         job.write_meta()
         job.emit({"type": "job", "id": jid, "folder": str(folder)})
         return job
+
+    def load_history(self, days: int = 7, limit: int = 200) -> int:
+        """Bring back the jobs of the last ``days`` days from their ``job.json`` files, so the
+        Jobs list survives a restart. Jobs that were still queued or running when the agent stopped
+        are marked ``interrupted``. Returns how many were loaded."""
+        base = self.root / "jobs"
+        if not base.is_dir():
+            return 0
+        oldest = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+        day_dirs = sorted((d for d in base.iterdir() if d.is_dir() and d.name >= oldest), reverse=True)
+        loaded = 0
+        for day in day_dirs:
+            for meta in day.glob("*/job.json"):
+                if loaded >= limit:
+                    return loaded
+                try:
+                    data = json.loads(meta.read_text("utf-8"))
+                    jid = str(data["id"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if jid in self.jobs:
+                    continue
+                folder = meta.parent
+                job = Job(
+                    id=jid,
+                    kind=str(data.get("kind") or "run"),
+                    name=str(data.get("name") or jid),
+                    argv=list(data.get("argv") or []),
+                    cwd=folder,
+                    folder=folder,
+                    state=str(data.get("state") or "failed"),
+                    exit_code=data.get("exit_code"),
+                    created=float(data.get("created") or meta.stat().st_mtime),
+                    started=data.get("started"),
+                    finished=data.get("finished"),
+                    outputs=list(data.get("outputs") or []),
+                    cached=bool(data.get("cached")),
+                )
+                if job.started and data.get("duration") is not None:
+                    job.exited = job.started + float(data["duration"])
+                if job.state not in TERMINAL:
+                    job.state = "interrupted"
+                    job.finished = job.finished or job.exited or job.created
+                    try:
+                        job.write_meta()
+                    except OSError:
+                        pass
+                self.jobs[jid] = job
+                loaded += 1
+        return loaded
 
     @staticmethod
     def lane(job: Job) -> str:

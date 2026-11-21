@@ -8,6 +8,7 @@ const STATE_LABEL: Record<string, string> = {
   done: "✅ Done",
   failed: "❌ Failed",
   cancelled: "⏹ Cancelled",
+  interrupted: "⚠️ Stopped (PC Bridge restarted)",
   running: "⏳ Running",
   queued: "🕒 Waiting",
 };
