@@ -542,6 +542,26 @@ pub async fn win_pairing_code(fresh: bool) -> Result<Value, String> {
     .await
 }
 
+/// Macs paired with this PC (name, when, and a number to remove one).
+#[tauri::command]
+pub async fn win_paired_macs() -> Result<Value, String> {
+    blocking(|| {
+        let c = local_client().ok_or(HELPER_MISSING)?;
+        c.get_json("/pair/devices", 8).map_err(friendly_error)
+    })
+    .await
+}
+
+/// Remove a paired Mac: its key stops working right away.
+#[tauri::command]
+pub async fn win_remove_mac(index: u32) -> Result<Value, String> {
+    blocking(move || {
+        let c = local_client().ok_or(HELPER_MISSING)?;
+        c.delete_json(&format!("/pair/devices/{index}")).map_err(friendly_error)
+    })
+    .await
+}
+
 // ---------------------------------------------------------------- Programs (installed by the helper)
 
 const HELPER_MISSING: &str =

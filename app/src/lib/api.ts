@@ -105,6 +105,9 @@ export const api = {
   winClaudeLogin: () => invoke<void>("win_claude_login"),
   winClaudeCheck: () => invoke<any>("win_claude_check"),
   winSetupAgent: () => invoke<any>("win_setup_agent"),
+  winPairedMacs: () =>
+    invoke<{ devices: { index: number; name: string; paired_at: number; device_id: string | null }[] }>("win_paired_macs"),
+  winRemoveMac: (index: number) => invoke<unknown>("win_remove_mac", { index }),
   winPairingCode: (fresh: boolean) => invoke<{ code: string; pc_name: string; pc_ip: string }>("win_pairing_code", { fresh }),
   winPrograms: () => invoke<ProgramsInfo>("win_programs"),
   winInstallProgram: (key: string) => invoke<InstallResult>("win_install_program", { key }),

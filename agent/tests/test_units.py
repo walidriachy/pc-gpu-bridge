@@ -382,3 +382,43 @@ def test_check_argv_paths_allows_switches(tmp_path):
     check_argv_paths(tmp_path, ["robocopy", "a", "b", "/MIR", "/R:2"])
     with pytest.raises(PathOutsideRoot):
         check_argv_paths(tmp_path, ["type", "/etc/passwd"])
+
+
+def test_pairing_same_mac_again_replaces_old_entry(tmp_path):
+    store = PairingStore(tmp_path)
+    old = store.redeem(store.ensure_code(), "Walid's MacBook Pro", "id-1")
+    other = store.redeem(store.ensure_code(), "Studio", "id-2")
+    new = store.redeem(store.ensure_code(), "Walid's MacBook Pro", "id-1")
+    assert [d["name"] for d in store.devices()] == ["Studio", "Walid's MacBook Pro"]
+    assert not store.verify(old), "the old token must stop working"
+    assert store.verify(new) and store.verify(other)
+
+
+def test_claim_removes_older_duplicates_of_this_mac(tmp_path):
+    store = PairingStore(tmp_path)
+    # Three pairings from before 0.1.4 (no device id), plus another Mac.
+    t1 = store.redeem(store.ensure_code(), "Walid's MacBook Pro")
+    t2 = store.redeem(store.ensure_code(), "Walid's MacBook Pro")
+    studio = store.redeem(store.ensure_code(), "Studio")
+    t3 = store.redeem(store.ensure_code(), "Walid's MacBook Pro")
+    assert store.claim(t3, "", "x") == 0  # no id: nothing happens
+    assert store.claim("not-a-token", "id-1", "x") == 0
+    assert store.claim(t3, "id-1", "Walid's MacBook Pro") == 2
+    assert [(d["name"], d["device_id"]) for d in store.devices()] == [
+        ("Studio", None),
+        ("Walid's MacBook Pro", "id-1"),
+    ]
+    assert store.verify(t3) and store.verify(studio)
+    assert not store.verify(t1) and not store.verify(t2)
+    assert store.claim(t3, "id-1", "Walid's MacBook Pro") == 0  # idempotent
+
+
+def test_forget_and_remove(tmp_path):
+    store = PairingStore(tmp_path)
+    a = store.redeem(store.ensure_code(), "A", "id-a")
+    b = store.redeem(store.ensure_code(), "B", "id-b")
+    assert store.forget(a) and not store.verify(a)
+    assert not store.forget(a)
+    assert store.remove(0) and not store.verify(b)
+    assert not store.remove(0)
+    assert store.is_local(store.local_token()) and not store.is_local(b) and not store.is_local(None)

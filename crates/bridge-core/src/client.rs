@@ -124,11 +124,11 @@ impl AgentClient {
         self.get_json("/jobs", 8)
     }
 
-    pub fn pair(&self, code: &str, device_name: &str) -> Result<Value> {
+    pub fn pair(&self, code: &str, device_name: &str, device_id: &str) -> Result<Value> {
         let r = self
             .req(reqwest::Method::POST, "/pair")
             .timeout(Duration::from_secs(10))
-            .json(&json!({"code": code, "device_name": device_name}))
+            .json(&json!({"code": code, "device_name": device_name, "device_id": device_id}))
             .send()
             .map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
@@ -141,6 +141,11 @@ impl AgentClient {
             .json(body)
             .send()
             .map_err(map_err)?;
+        Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
+    }
+
+    pub fn delete_json(&self, path: &str) -> Result<Value> {
+        let r = self.req(reqwest::Method::DELETE, path).timeout(Duration::from_secs(20)).send().map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
 

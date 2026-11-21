@@ -89,6 +89,7 @@ fn run_gui(minimized: bool) {
                         let _ = mac::ensure_local_syncthing(&st, &mut cfg);
                     }
                 });
+                std::thread::spawn(mac::claim_device_once);
                 // Keep Tailscale open and connected once this Mac is paired.
                 std::thread::spawn(|| loop {
                     if !BridgeConfig::load().pc_host.is_empty() {
@@ -138,6 +139,8 @@ fn run_gui(minimized: bool) {
             win::win_claude_check,
             win::win_setup_agent,
             win::win_pairing_code,
+            win::win_paired_macs,
+            win::win_remove_mac,
             win::win_programs,
             win::win_install_program,
             win::win_configure_wol,

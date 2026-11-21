@@ -1,5 +1,5 @@
 //! Mac-side settings stored in `~/.pcbridge/config.json`. The auth token is NOT stored here: it
-//! lives in the macOS Keychain / Windows Credential Manager (see [`crate::secrets`]).
+//! lives in its own private file (see [`crate::secrets`]).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -35,6 +35,8 @@ pub struct BridgeConfig {
     pub wizard_step: u32,
     /// API key for PC Bridge's private Syncthing instance on this Mac.
     pub syncthing_api_key: String,
+    /// Stable id for this Mac, sent when pairing so the PC replaces (not duplicates) its entry.
+    pub device_id: String,
 }
 
 impl Default for BridgeConfig {
@@ -53,6 +55,7 @@ impl Default for BridgeConfig {
             setup_complete: false,
             wizard_step: 0,
             syncthing_api_key: String::new(),
+            device_id: String::new(),
         }
     }
 }

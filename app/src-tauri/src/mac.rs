@@ -365,7 +365,8 @@ pub async fn pair_pc(host: String, code: String) -> Result<Value, String> {
                 "Can't reach PC Bridge on '{host}'. Is the PC on, with PC Bridge open and Tailscale connected? ({e})"
             )
         })?;
-        let r = c.pair(&code, &computer_name()).map_err(|e| e.to_string())?;
+        let device_id = ensure_device_id()?;
+        let r = c.pair(&code, &computer_name(), &device_id).map_err(|e| e.to_string())?;
         let token = r["token"].as_str().ok_or("The PC didn't send a token")?;
         secrets::set_token(token)?;
         let mut cfg = BridgeConfig::load();
@@ -379,8 +380,39 @@ pub async fn pair_pc(host: String, code: String) -> Result<Value, String> {
     .await
 }
 
+/// This Mac's stable pairing id, created on first use.
+fn ensure_device_id() -> Result<String, String> {
+    let mut cfg = BridgeConfig::load();
+    if cfg.device_id.is_empty() {
+        cfg.device_id = crate::util::random_key(24);
+        cfg.save().map_err(|e| e.to_string())?;
+    }
+    Ok(cfg.device_id)
+}
+
+/// Once per start: tag this Mac's entry on the PC with its id. This also removes older duplicate
+/// pairings of this Mac that earlier versions left behind (they had no id).
+pub fn claim_device_once() {
+    let cfg = BridgeConfig::load();
+    let (Some(c), Ok(device_id)) = (client(&cfg), ensure_device_id()) else { return };
+    for _ in 0..10 {
+        match c.post_json("/pair/claim", &json!({"device_id": device_id, "device_name": computer_name()})) {
+            // PC off or asleep: try again in a minute (for up to 10 minutes).
+            Err(bridge_core::client::ClientError::Unreachable(_)) => {
+                std::thread::sleep(std::time::Duration::from_secs(60))
+            }
+            // Done, or an older PC helper without /pair/claim (it's tried again on the next start).
+            _ => return,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn unpair() -> Result<(), String> {
+    // Tell the PC first so this Mac's key stops working there (ignored if the PC is off).
+    if let Some(c) = client(&BridgeConfig::load()) {
+        let _ = c.post_json("/pair/forget", &json!({}));
+    }
     secrets::clear_token();
     let mut cfg = BridgeConfig::load();
     cfg.pc_host.clear();

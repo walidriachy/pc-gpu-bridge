@@ -67,6 +67,12 @@ class DelegateRequest(BaseModel):
 class PairRequest(BaseModel):
     code: str
     device_name: str = "Mac"
+    device_id: str | None = None
+
+
+class ClaimRequest(BaseModel):
+    device_id: str
+    device_name: str = "Mac"
 
 
 class ShareRequest(BaseModel):
@@ -209,7 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/pair")
     async def pair(req: PairRequest):
-        token = pairing.redeem(req.code, req.device_name)
+        token = pairing.redeem(req.code, req.device_name, req.device_id)
         if not token:
             raise HTTPException(403, "That code is wrong or expired. Check the code on the PC screen.")
         return {
@@ -222,6 +228,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     # ---- authenticated ---------------------------------------------------
+    def _token(authorization: str | None) -> str:
+        return (authorization or "").removeprefix("Bearer ").strip()
+
+    @app.post("/pair/claim", dependencies=[Depends(auth)])
+    async def pair_claim(req: ClaimRequest, authorization: str | None = Header(default=None)):
+        """A Mac tags its own entry with its device id; older duplicates of it are removed."""
+        return {"removed": pairing.claim(_token(authorization), req.device_id, req.device_name)}
+
+    @app.post("/pair/forget", dependencies=[Depends(auth)])
+    async def pair_forget(authorization: str | None = Header(default=None)):
+        """A Mac unpairing itself: its token stops working."""
+        return {"forgotten": pairing.forget(_token(authorization))}
+
+    @app.get("/pair/devices", dependencies=[Depends(auth)])
+    async def pair_devices():
+        return {"devices": pairing.devices()}
+
+    @app.delete("/pair/devices/{index}", dependencies=[Depends(auth)])
+    async def pair_remove(index: int, authorization: str | None = Header(default=None)):
+        if not pairing.is_local(_token(authorization)):
+            raise HTTPException(403, "Only PC Bridge on the PC itself can remove paired Macs.")
+        if not pairing.remove(index):
+            raise HTTPException(404, "No paired Mac with that number.")
+        return {"devices": pairing.devices()}
+
     @app.post("/pair/new", dependencies=[Depends(auth)])
     async def pair_new():
         """Fresh pairing code (used by the PC's own app via its local token)."""

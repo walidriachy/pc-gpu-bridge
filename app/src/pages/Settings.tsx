@@ -141,8 +141,54 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
         {helper && <p className="muted small">{helper}</p>}
       </Card>
       <Card title="Pairing">
+        <PairedMacs />
         <button className="btn" onClick={onRerunSetup}>Show a pairing code / run setup again</button>
       </Card>
+    </div>
+  );
+}
+
+function PairedMacs() {
+  const [list, setList] = useState<{ index: number; name: string; paired_at: number }[] | null>(null);
+  const [msg, setMsg] = useState("");
+  const load = () =>
+    api
+      .winPairedMacs()
+      .then((r) => setList(r.devices))
+      .catch((e) => setMsg(errText(e)));
+  useEffect(() => {
+    load();
+  }, []);
+  if (!list) return msg ? <p className="muted small">{msg}</p> : null;
+  return (
+    <div className="paired-macs">
+      {list.length === 0 ? (
+        <p className="muted">No Mac is paired with this PC.</p>
+      ) : (
+        <ul className="plain-list">
+          {list.map((d) => (
+            <li key={d.index}>
+              <strong>{d.name}</strong>{" "}
+              <span className="muted small">paired {new Date(d.paired_at * 1000).toLocaleDateString()}</span>{" "}
+              <button
+                className="btn small"
+                onClick={() =>
+                  api
+                    .winRemoveMac(d.index)
+                    .then(() => {
+                      setMsg(`${d.name} removed. Its key no longer works on this PC.`);
+                      load();
+                    })
+                    .catch((e) => setMsg(errText(e)))
+                }
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {msg && <p className="muted small">{msg}</p>}
     </div>
   );
 }

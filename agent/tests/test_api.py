@@ -291,3 +291,27 @@ def test_status_lists_programs_like_the_programs_page(env, monkeypatch):
     tools = env["client"].get("/status").json()["tools"]
     assert tools["blender"] is True and tools["pytorch"] is True
     assert tools["git"] is False and tools["ffmpeg"] is False
+
+
+def test_pair_claim_forget_and_remove_endpoints(env):
+    c, app = env["client"], env["app"]
+    assert c.post("/pair/claim", json={"device_id": "mac-1", "device_name": "test-mac"}).json() == {
+        "removed": 0
+    }
+    devs = c.get("/pair/devices").json()["devices"]
+    assert devs == [{"index": 0, "name": "test-mac", "paired_at": devs[0]["paired_at"], "device_id": "mac-1"}]
+    # A Mac token may not remove devices; only the PC's own app (local token) may.
+    assert c.delete("/pair/devices/0").status_code == 403
+    local = TestClient(app, headers={"Authorization": f"Bearer {app.state.pairing.local_token()}"})
+    code = app.state.pairing.ensure_code()
+    tok = (
+        TestClient(app)
+        .post("/pair", json={"code": code, "device_name": "other", "device_id": "mac-2"})
+        .json()["token"]
+    )
+    assert local.delete("/pair/devices/5").status_code == 404
+    assert [d["name"] for d in local.delete("/pair/devices/1").json()["devices"]] == ["test-mac"]
+    assert TestClient(app, headers={"Authorization": f"Bearer {tok}"}).get("/status").status_code == 401
+    # Unpairing from the Mac: its token stops working.
+    assert c.post("/pair/forget").json() == {"forgotten": True}
+    assert c.get("/status").status_code == 401
