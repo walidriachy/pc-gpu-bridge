@@ -160,7 +160,7 @@ timeline
 - `pc_install` covers a fixed list of seven programs. A Windows "Yes" (UAC) prompt on the PC may need someone at the PC. A CPU-only PyTorch, or torch without torchvision, still counts as "installed".
 - Wake-on-LAN works only when the Mac is on the same home network as the PC (Tailscale can't carry the wake signal).
 - Node/Docker offload needs the project's dependencies installed on the PC side (Windows `node_modules` are not synced from the Mac).
-- The apps are **not signed with a paid certificate** (the Mac app is ad-hoc signed from 0.1.3): macOS Gatekeeper and Windows SmartScreen warn on first open (one-time "Open Anyway" / "Run anyway" in `docs/GUIDE.md`). Ad-hoc signatures change with every build, so the Keychain may ask again after an update.
+- The apps are **not signed with a paid certificate** (the Mac app is ad-hoc signed from 0.1.3): macOS Gatekeeper and Windows SmartScreen warn on first open (one-time "Open Anyway" / "Run anyway" in `docs/GUIDE.md`). From 0.1.4 the pairing key is kept in a private file, so updates no longer bring back the Keychain password prompt.
 - GitHub stores release files with spaces as dots, so the downloads are named `PC.Bridge.dmg` / `PC.Bridge.Setup.exe` (the release page label shows the readable name).
 - The Windows side (winget installs, WoL adapter script, power plan, tray) is compiled and built in CI but was not run on a real Windows PC during development.
 - Only an Apple Silicon DMG is produced (no Intel Mac build).

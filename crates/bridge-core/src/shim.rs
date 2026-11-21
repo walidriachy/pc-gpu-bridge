@@ -95,6 +95,10 @@ struct PcTiming {
     stream_secs: f64,
 }
 
+/// The PC is on but didn't accept this Mac's pairing key.
+pub const KEY_REFUSED: &str =
+    "The PC didn't accept this Mac's pairing key. Pair again: on the Mac open PC Bridge → Settings → Run setup again";
+
 #[derive(Debug, Clone)]
 pub struct ShimResult {
     pub exit_code: i32,
@@ -292,24 +296,32 @@ impl Engine {
     }
 
     /// Check the PC; if it's asleep send Wake-on-LAN and wait. Returns PC status JSON.
-    pub fn ensure_awake(&self, io: &mut dyn ShimIo) -> Option<(Value, bool)> {
-        let client = self.client.as_ref()?;
-        if let Ok(s) = client.status() {
-            return Some((s, true));
+    /// Reach the PC, waking it if needed. `Err` says why it can't be used, in plain words.
+    pub fn ensure_awake(&self, io: &mut dyn ShimIo) -> Result<(Value, bool), String> {
+        let Some(client) = self.client.as_ref() else {
+            return Err("This Mac isn't paired with a PC yet. Open PC Bridge to set it up.".into());
+        };
+        match client.status() {
+            Ok(s) => return Ok((s, true)),
+            // Waking won't help: the PC is on and turned the key down.
+            Err(ClientError::Unauthorized) => return Err(KEY_REFUSED.into()),
+            Err(_) => {}
         }
         if self.cfg.pc_mac_address.is_empty() || self.wake_timeout.is_zero() {
-            return None;
+            return Err("The PC couldn't be reached".into());
         }
         io.err("[PC Bridge] waking the PC…\n");
         let _ = crate::wol::wake(&self.cfg.pc_mac_address);
         let start = Instant::now();
         while start.elapsed() < self.wake_timeout {
             std::thread::sleep(Duration::from_secs(3));
-            if let Ok(s) = client.status() {
-                return Some((s, false));
+            match client.status() {
+                Ok(s) => return Ok((s, false)),
+                Err(ClientError::Unauthorized) => return Err(KEY_REFUSED.into()),
+                Err(_) => {}
             }
         }
-        None
+        Err("The PC couldn't be reached".into())
     }
 
     /// Run on the Mac. With `learn`, the run is one the router could have sent to the PC (it chose
@@ -392,24 +404,27 @@ impl Engine {
             return self.local_fallback(tool, args, cwd, plan.class.reason.clone(), None, None);
         }
 
-        let Some((status, was_awake)) = self.ensure_awake(io) else {
-            let why = "The PC couldn't be reached, so this ran on the Mac instead".to_string();
-            if self.cfg.notify_on_fallback {
-                io.notify(&why);
+        let (status, was_awake) = match self.ensure_awake(io) {
+            Ok(v) => v,
+            Err(problem) => {
+                let why = format!("{problem}, so this ran on the Mac instead");
+                if self.cfg.notify_on_fallback {
+                    io.notify(&why);
+                }
+                if force == Some(Target::Pc) {
+                    return ShimResult {
+                        exit_code: 3,
+                        target: Target::Pc,
+                        reason: why,
+                        outputs: vec![],
+                        job_id: None,
+                        seconds: 0.0,
+                        decision: None,
+                        missing: None,
+                    };
+                }
+                return self.local_fallback(tool, args, cwd, why, None, Some(&plan));
             }
-            if force == Some(Target::Pc) {
-                return ShimResult {
-                    exit_code: 3,
-                    target: Target::Pc,
-                    reason: why,
-                    outputs: vec![],
-                    job_id: None,
-                    seconds: 0.0,
-                    decision: None,
-                    missing: None,
-                };
-            }
-            return self.local_fallback(tool, args, cwd, why, None, Some(&plan));
         };
 
         let mac_mem = self.mac_mem.clone().unwrap_or_else(memory::local_memory);

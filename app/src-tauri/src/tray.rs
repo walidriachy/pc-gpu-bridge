@@ -117,6 +117,9 @@ fn snapshot() -> Snapshot {
                 let label = if cfg.redirect_enabled { "PC ready" } else { "PC ready (redirecting paused)" };
                 summarize(Some(&st), gpu.as_ref(), mac_free, Light::Green, label)
             }
+            Err(bridge_core::client::ClientError::Unauthorized) => {
+                summarize(None, None, mac_free, Light::Red, "PC didn't accept this Mac's key — pair again")
+            }
             Err(_) => summarize(None, None, mac_free, Light::Yellow, "PC asleep or offline — will wake for jobs"),
         }
     }

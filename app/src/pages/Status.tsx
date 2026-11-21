@@ -58,8 +58,15 @@ function MacStatus() {
   const [s] = usePoll(() => api.statusSnapshot(), 5000);
   const [msg, setMsg] = useState("");
   if (!s) return <p className="muted">Checking your PC…</p>;
-  const color = s.reachable ? "green" : s.paired ? "yellow" : "red";
-  const label = s.reachable ? `${s.pc_hostname || "PC"} is ready` : s.paired ? "PC is asleep or offline — it will be woken for the next job" : "Not connected to a PC yet";
+  const refused = s.error_kind === "unauthorized";
+  const color = s.reachable ? "green" : s.paired && !refused ? "yellow" : "red";
+  const label = s.reachable
+    ? `${s.pc_hostname || "PC"} is ready`
+    : refused
+      ? "The PC didn't accept this Mac's pairing key. Go to Settings → Run setup again to pair."
+      : s.paired
+        ? "PC is asleep or offline — it will be woken for the next job"
+        : "Not connected to a PC yet";
   return (
     <div className="grid">
       <Card
@@ -72,7 +79,7 @@ function MacStatus() {
         }
       >
         <p className="status-line"><Dot color={color} /> {label}</p>
-        {!s.reachable && s.paired && (
+        {!s.reachable && s.paired && !refused && (
           <button className="btn small" onClick={() => api.wakePc().then(setMsg).catch((e) => setMsg(errText(e)))}>Wake PC</button>
         )}
         {msg && <p className="muted small">{msg}</p>}

@@ -204,7 +204,7 @@ D:\PCBridge\
 ```mermaid
 flowchart LR
   M["Mac"] -- "6-digit code: 15 min, 5 tries, once" --> A["Agent"]
-  A -- "256-bit token, kept in Mac Keychain" --> M
+  A -- "256-bit token, kept in ~/.pcbridge/token (0600)" --> M
   M -- "Bearer token on every request" --> A
   A --> H[("auth.json<br/>SHA-256 hashes only")]
 ```

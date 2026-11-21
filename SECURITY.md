@@ -21,7 +21,7 @@ PC Bridge lets one Mac run commands on one PC, so the design concentrates on mak
 |---|---|
 | Network | The agent binds only to `127.0.0.1` and the PC's **Tailscale** IP (WireGuard-encrypted, reachable only by devices on your tailnet). It never listens on the LAN or the internet |
 | Pairing | A 6-digit code shown on the PC: one use, 15-minute expiry, 5 attempts |
-| Authentication | Pairing returns a 256-bit random token. The Mac keeps it in the **Keychain**, and the PC stores only its **SHA-256 hash**. Every endpoint except `/health` and `/pair` requires it |
+| Authentication | Pairing returns a 256-bit random token. The Mac keeps it in `~/.pcbridge/token` with owner-only permissions (0600; before 0.1.4 it was in the Keychain), and the PC stores only its **SHA-256 hash**. Every endpoint except `/health` and `/pair` requires it |
 | File system | Every path is resolved and must be inside the PC root (`D:\PCBridge`). Anything else, including `..` tricks and symlinks out, is refused |
 | Execution | Commands run as the normal Windows user, not admin. An optional `allowlist` in `config\settings.json` limits which programs may run |
 | Worker Claude | Runs in `PCBridge\worker` with an explicit `--allowedTools` list |

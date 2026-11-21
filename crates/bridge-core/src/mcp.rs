@@ -357,8 +357,8 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
             let Some(client) = &engine.client else {
                 return error("Not paired with a PC yet. Open PC Bridge to set it up.");
             };
-            if engine.ensure_awake(&mut Capture::default()).is_none() {
-                return error("Can't reach the PC right now. Check it's on and PC Bridge is running there.");
+            if let Err(problem) = engine.ensure_awake(&mut Capture::default()) {
+                return error(format!("{problem}. Check the PC is on and PC Bridge is running there."));
             }
             let mut log = String::new();
             match client.install_program(&program, |ev| {
@@ -459,9 +459,10 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
         "pc_wake" => {
             let mut io = Capture::default();
             match engine.ensure_awake(&mut io) {
-                Some((_, true)) => text("The PC is already awake."),
-                Some((_, false)) => text("The PC woke up and is ready."),
-                None => error("Couldn't wake the PC. Wake-on-LAN only works when the Mac is on the same home network; check the PC is plugged in and Wake-on-LAN is enabled."),
+                Ok((_, true)) => text("The PC is already awake."),
+                Ok((_, false)) => text("The PC woke up and is ready."),
+                Err(problem) if problem == crate::shim::KEY_REFUSED => error(problem),
+                Err(_) => error("Couldn't wake the PC. Wake-on-LAN only works when the Mac is on the same home network; check the PC is plugged in and Wake-on-LAN is enabled."),
             }
         }
         "comfy_generate" => match (&engine.client, args.get("workflow")) {

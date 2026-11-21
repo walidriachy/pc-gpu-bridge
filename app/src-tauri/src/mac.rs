@@ -626,16 +626,20 @@ pub async fn status_snapshot() -> Result<Value, String> {
         if let (Some(c), Some(Ok(_))) = (c.as_ref(), pc.as_ref()) {
             let _ = c.post_json("/peer/memory", &json!(mac));
         }
-        let (reachable, pc_status, err) = match pc {
-            Some(Ok(s)) => (true, s, Value::Null),
-            Some(Err(e)) => (false, Value::Null, json!(e.to_string())),
-            None => (false, Value::Null, json!("not paired")),
+        let (reachable, pc_status, err, kind) = match pc {
+            Some(Ok(s)) => (true, s, Value::Null, "ok"),
+            Some(Err(bridge_core::client::ClientError::Unauthorized)) => {
+                (false, Value::Null, json!(bridge_core::shim::KEY_REFUSED), "unauthorized")
+            }
+            Some(Err(e)) => (false, Value::Null, json!(e.to_string()), "unreachable"),
+            None => (false, Value::Null, json!("not paired"), "not_paired"),
         };
         let gpu = if reachable { c.as_ref().and_then(|c| c.gpu().ok()).unwrap_or(Value::Null) } else { Value::Null };
         Ok(json!({
             "paired": cfg.is_paired(),
             "reachable": reachable,
             "error": err,
+            "error_kind": kind,
             "redirect_enabled": cfg.redirect_enabled,
             "pc_hostname": cfg.pc_hostname,
             "mac_memory": mac,
@@ -719,7 +723,7 @@ pub async fn run_diagnostics_mac() -> Result<Vec<Value>, String> {
         out.push(check("Tailscale installed", ts["installed"] == true, "", "Open the Setup again and use “Install Tailscale”."));
         out.push(check("Tailscale connected", ts["running"] == true, "", "Click the Tailscale icon in the menu bar and choose “Connect” / log in."));
         out.push(check("Paired with a PC", cfg.is_paired(), cfg.pc_hostname.clone(), "Go to Settings → “Pair again” and enter the code shown on the PC."));
-        out.push(check("Pairing key saved in Keychain", secrets::get_token().is_some(), "", "Pair again — this saves a fresh key."));
+        out.push(check("Pairing key saved on this Mac", secrets::get_token().is_some(), "", "Pair again — this saves a fresh key."));
         let c = client(&cfg);
         let status = c.as_ref().map(|c| c.status());
         let reachable = matches!(status, Some(Ok(_)));

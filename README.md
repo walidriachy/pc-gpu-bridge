@@ -57,7 +57,7 @@ Both have step-by-step setup wizards, so **you don't need Terminal.**
 | 📁 **Automatic file sync** | A private Syncthing setup that the app configures for you. Inputs a command names are pushed directly if they haven't synced yet |
 | ⚡ **Result cache & warm models** | The same command on the same inputs reuses the earlier result, and Ollama models stay loaded |
 | 🌙 **Wake-on-LAN** | The PC can sleep and wakes up for jobs. The wizard configures the network card for you |
-| 🔒 **Private by design** | Tailscale only, one-time pairing code, token in the Keychain, one strict root folder on the PC, optional allowlist |
+| 🔒 **Private by design** | Tailscale only, one-time pairing code, token in a private file only you can read, one strict root folder on the PC, optional allowlist |
 | 🧹 **Self-cleaning** | Job folders are deleted after 14 days, and the cache is capped at 20 GB |
 | 🩺 **Diagnostics** | One button checks every part and explains each fix in plain English |
 
@@ -206,7 +206,7 @@ Details, decisions and known limitations: **[ROADMAP.md](ROADMAP.md)**.
 ## Security
 
 * **Network:** Tailscale only. The agent never binds to your LAN or a public address.
-* **Pairing:** a 6-digit code that works once, expires after 15 minutes and allows 5 tries. It's exchanged for a 256-bit token stored in the Mac's Keychain. The PC stores only a SHA-256 hash of it.
+* **Pairing:** a 6-digit code that works once, expires after 15 minutes and allows 5 tries. It's exchanged for a 256-bit token stored in `~/.pcbridge/token`, readable only by your Mac user. The PC stores only a SHA-256 hash of it.
 * **Requests:** every request is authenticated. Every path is confined to the PC root, and an optional program allowlist is available.
 * **Installs:** the PC only installs programs from a fixed list (FFmpeg, Blender, PyTorch, Ollama, Node.js, Docker Desktop, Git), with Windows' own installer (winget) or pip. `pc_install` and the **Install** buttons send only the program's name; the PC builds the install command itself.
 

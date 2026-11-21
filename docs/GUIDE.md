@@ -182,7 +182,7 @@ On the Mac, if 0.1.2 stays on 0.1.2 (usually after the "damaged" message in Part
 * `~/.pcbridge/` (settings, history, helper commands)
 * A "PC Bridge" entry in `~/.claude.json` and in the Claude Desktop config, each backed up first
 * A clearly marked block in `~/.claude/CLAUDE.md` and in `~/.zshrc`
-* The pairing key, stored in your Keychain
+* The pairing key, stored in `~/.pcbridge/token` (only your Mac user can read it)
 
 **PC:**
 * Everything goes in the `PCBridge` folder: `workspace`, `jobs`, `worker`, `cache`, `logs`, `config`

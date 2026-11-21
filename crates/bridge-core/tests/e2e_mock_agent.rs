@@ -53,6 +53,7 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 let (method, target) = (parts[0].to_string(), parts[1].to_string());
                 let mut len = 0usize;
+                let mut authed = false;
                 loop {
                     let mut h = String::new();
                     reader.read_line(&mut h).unwrap();
@@ -65,6 +66,10 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                     }
                     if lower.starts_with("authorization: bearer secret") {
                         seen.lock().unwrap().auth_ok = true;
+                        authed = true;
+                    }
+                    if lower.starts_with("authorization: bearer ") && !authed {
+                        authed = !lower.starts_with("authorization: bearer wrong");
                     }
                 }
                 let mut body = vec![0u8; len];
@@ -73,6 +78,10 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                 let ndjson = |evs: &[Value]| evs.iter().map(|e| e.to_string() + "\n").collect::<String>().into_bytes();
                 let mut status_line = "200 OK";
                 let (ctype, resp): (&str, Vec<u8>) = match (method.as_str(), path) {
+                    _ if !authed => {
+                        status_line = "401 Unauthorized";
+                        ("application/json", br#"{"detail":"not paired"}"#.to_vec())
+                    }
                     ("GET", "/status") => (
                         "application/json",
                         json!({
@@ -569,4 +578,33 @@ fn real_python_agent_if_available() {
     assert_eq!(r.exit_code, 0, "stderr: {} notes: {:?}", io.stderr, io.notes);
     assert!(io.stdout.contains("ok"));
     assert_eq!(std::fs::read_to_string(ws.join("result.txt")).unwrap(), "HELLO");
+}
+
+#[test]
+fn refused_key_is_reported_without_waking_the_pc() {
+    let (url, _seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"x").unwrap();
+    let mut cfg = BridgeConfig::default();
+    cfg.shared_folders = vec![SharedFolder { mac_path: dir.path().display().to_string(), name: "w".into() }];
+    cfg.pc_mac_address = "00:11:22:33:44:55".into();
+    cfg.notify_on_fallback = false;
+    let engine = Engine {
+        cfg,
+        client: Some(AgentClient::new(url, Some("wrong".into()))),
+        history: None,
+        mac_mem: None,
+        local: |_, _, _| 0,
+        wake_timeout: Duration::from_secs(60),
+    };
+    let mut io = Capture::default();
+    let start = std::time::Instant::now();
+    let err = engine.ensure_awake(&mut io).unwrap_err();
+    assert_eq!(err, bridge_core::shim::KEY_REFUSED);
+    assert!(start.elapsed() < Duration::from_secs(5), "must not wait for a wake");
+    assert!(!io.stderr.contains("waking"), "{}", io.stderr);
+    let args: Vec<String> = ["-i", "in.mov", "-c:v", "libx264", "o.mp4"].iter().map(|s| s.to_string()).collect();
+    let r = engine.run("ffmpeg", &args, dir.path(), Some(Target::Pc), &mut io);
+    assert_eq!(r.exit_code, 3);
+    assert!(r.reason.contains("didn't accept this Mac's pairing key"), "{}", r.reason);
 }

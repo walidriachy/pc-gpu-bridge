@@ -204,7 +204,7 @@ After editing it, quit PC Bridge from the tray menu and open it again so the age
 |---|---|---|
 | `PCBRIDGE_LOCAL=1` | Mac | Run the next command on the Mac, no questions asked |
 | `PCBRIDGE_HOME` | Mac | Use another settings folder instead of `~/.pcbridge` (testing) |
-| `PCBRIDGE_TOKEN` | Mac | Use this token instead of the Keychain one (testing/CI) |
+| `PCBRIDGE_TOKEN` | Mac | Use this token instead of the saved one (testing/CI) |
 | `PCBRIDGE_NO_NOTIFY=1` | Mac | No macOS notifications |
 | `PCBRIDGE_ROOT` | PC | Agent root folder override |
 
@@ -216,7 +216,7 @@ After editing it, quit PC Bridge from the tray menu and open it again so the age
 | `~/.pcbridge/history.sqlite` | Routing history (timings) |
 | `~/.pcbridge/bin/` | Shims + `pc-bridge` launcher |
 | `~/.pcbridge/syncthing/` | Private Syncthing instance (GUI on 127.0.0.1:8385) |
-| Keychain → `com.pcbridge.app` | Pairing token |
+| `~/.pcbridge/token` | Pairing token (owner-only, 0600) |
 
 | PC | |
 |---|---|
