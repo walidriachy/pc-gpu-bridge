@@ -979,6 +979,11 @@ mod tests {
         let (_d, shared, m) = spaced();
         let p = plan(&m, "cmd", &s(&["/c", "echo", "hi"]), &shared).unwrap();
         assert_eq!(p.argv, s(&["cmd", "/c", "echo", "hi"]));
+        // Shims run on the Mac only. On Windows CI the temp folder's short 8.3 name (RUNNER~1)
+        // doesn't match the shared folder's long name for a path that doesn't exist yet.
+        if !cfg!(unix) {
+            return;
+        }
         let new_out = shared.join("renders").join("run2").join("out.mp4");
         let p = plan(&m, "ffmpeg", &s(&["-i", "in.mov", &new_out.display().to_string()]), &shared).unwrap();
         assert_eq!(p.argv[3], r"D:\PCBridge\workspace\Created Apps in claude\renders\run2\out.mp4");
