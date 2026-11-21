@@ -27,6 +27,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("doctor") => {
+            // Plain-text health check for support: what the setup screens see, without the window.
+            let report = serde_json::json!({ "tailscale": mac::tailscale_status() });
+            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        }
         Some("shim") if args.len() >= 3 => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
             let engine = Engine::from_config(BridgeConfig::load());

@@ -1,0 +1,38 @@
+name: 🐞 Bug report
+description: Something doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Tip: **Help → Run diagnostics** in the app often says exactly what's wrong. Please paste its result below.
+        Don't paste tokens, or anything from `auth.json` or `local_token`.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options: [Mac app, Windows app, Claude (MCP tools), Terminal (shims / pc-bridge run), Setup wizard, Not sure]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open …  2. Click …  3. See …"
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics / logs
+      description: Output of Help → Run diagnostics or `pc-bridge doctor`; on the PC, the end of `PCBridge\logs\agent.log`.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "PC Bridge 0.1.0 · macOS 15.x on M1 Pro · Windows 11 23H2 · RTX 3090 driver 5xx"

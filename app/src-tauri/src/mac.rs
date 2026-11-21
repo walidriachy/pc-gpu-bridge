@@ -66,13 +66,31 @@ pub fn tailscale_bin() -> Option<String> {
     candidates.into_iter().find(|p| Path::new(p).exists()).or_else(|| which("tailscale"))
 }
 
+/// Run the Tailscale CLI. On macOS the CLI is the Tailscale app binary itself; started from another
+/// app (no terminal) it tries to open its GUI and prints nothing useful unless TAILSCALE_BE_CLI is set.
+fn tailscale_cli(bin: &str, args: &[&str]) -> crate::util::Out {
+    match crate::util::command(bin).args(args).env("TAILSCALE_BE_CLI", "1").output() {
+        Ok(o) => crate::util::Out {
+            code: o.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&o.stdout).into(),
+            stderr: String::from_utf8_lossy(&o.stderr).into(),
+        },
+        Err(e) => crate::util::Out { code: -1, stdout: String::new(), stderr: e.to_string() },
+    }
+}
+
 pub fn tailscale_status() -> Value {
     let Some(bin) = tailscale_bin() else {
         return json!({"installed": false, "running": false, "peers": []});
     };
-    let out = run(&bin, &["status", "--json"]);
+    let out = tailscale_cli(&bin, &["status", "--json"]);
     let v: Value = serde_json::from_str(&out.stdout).unwrap_or(Value::Null);
     let state = v["BackendState"].as_str().unwrap_or("");
+    if v.is_null() {
+        // Couldn't read Tailscale's answer at all: report that instead of "not connected".
+        let why = format!("{} {}", out.stdout.trim(), out.stderr.trim());
+        return json!({"installed": true, "running": false, "unreadable": true, "detail": why.trim(), "peers": []});
+    }
     let peers: Vec<Value> = v["Peer"]
         .as_object()
         .map(|m| {

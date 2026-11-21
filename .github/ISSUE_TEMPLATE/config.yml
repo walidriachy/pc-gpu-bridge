@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Beginner guide & troubleshooting
+    url: https://github.com/walidriachy/pc-gpu-bridge/blob/main/docs/GUIDE.md#troubleshooting
+    about: Most setup problems are answered here.
+  - name: 🔒 Report a security problem privately
+    url: https://github.com/walidriachy/pc-gpu-bridge/security/advisories/new
+    about: Please don't open public issues for vulnerabilities.
