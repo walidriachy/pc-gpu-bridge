@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — Phase 1 complete (agent, 26 tests green); Phase 2 in progress_
+_Last updated: 2026-11-21 — Phases 1–2 complete (agent 26 tests, core 42 tests incl. real Rust↔Python e2e); Phase 3 (app) in progress_
 
 ## Architecture in one picture
 
@@ -28,9 +28,9 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 |---|-------|--------|-------|
 | 0 | Repo scaffold, roadmap, architecture | ✅ | |
 | 1 | PC agent (FastAPI): /run /delegate /status /gpu /memory /files /cancel /pair, queue, strict root, cache, cleanup | ✅ | 26 tests, ruff clean |
-| 2 | `bridge-core` Rust crate: path mapping, **memory-aware** router, GPU/RAM job detection, ffmpeg NVENC rewrite, agent client, MCP server | 🔄 | |
-| 2b | **Memory-aware routing (added 2026-11-21)**: Mac memory pressure, RAM estimates, docker/node/npm/pnpm shims (opt-in per project), generic `pc_run_task`, Mac vs PC RAM side by side, Help text | 🔄 | agent side ✅ (`/memory`, RAM in `/status`) |
-| 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | ⏳ | |
+| 2 | `bridge-core` Rust crate: path mapping, **memory-aware** router, GPU/RAM job detection, ffmpeg NVENC rewrite, agent client, MCP server | ✅ | 42 tests, clippy clean |
+| 2b | **Memory-aware routing (added 2026-11-21)**: Mac memory pressure, RAM estimates, docker/node/npm/pnpm shims (opt-in per project), generic `pc_run_task`, Mac vs PC RAM side by side, Help text | 🔄 | engine ✅; UI pieces in Phase 3 |
+| 3 | Tauri app: wizards (Mac 8 steps / Windows 9 steps), Status/Jobs/Settings/Help, tray/menu bar, diagnostics | 🔄 | |
 | 4 | Installers & system actions: winget installs, WoL adapter config, power, autostart, keychain, MCP config writers, shims | ⏳ | |
 | 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | ⏳ | |
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ⏳ | |
@@ -51,16 +51,19 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Tests: paths, queue, pairing, cache, GPU parse, end-to-end with mock commands
 
 ### Phase 2 — bridge-core
-- [ ] Mac memory pressure (`memory_pressure` / `vm_stat`) + per-job RAM estimate (pandas/numpy, docker, next build, LLMs)
-- [ ] Router sends RAM-heavy jobs or jobs during Mac memory pressure to the PC
-- [ ] Shims + MCP tools for docker, node/npm/pnpm (opt-in per project via `.pcbridge` file) and generic `pc_run_task`
-- [ ] Path mapping Mac ⇄ PC (shared folders → `workspace\<name>\…`)
-- [ ] Smart router (Mac est. vs PC est. + transfer + queue; learns from SQLite history)
-- [ ] Python GPU detection (torch/diffusers/whisper/comfy/marker)
-- [ ] ffmpeg NVENC auto-swap (libx264→h264_nvenc, libx265→hevc_nvenc when safe)
-- [ ] HTTP client (streaming), Wake-on-LAN magic packet
-- [ ] MCP stdio server: pc_run, pc_delegate_task, pc_status, pc_gpu, pc_push_file, pc_pull_file, pc_wake, comfy_generate, ollama_chat
-- [ ] Tests: mapping, router, detection, ffmpeg rewrite, MCP protocol, mock-agent e2e
+- [x] Mac memory pressure (`memory_pressure` / `vm_stat`) + per-job RAM estimate (pandas/numpy, docker, next build, LLMs)
+- [x] Router sends RAM-heavy jobs or jobs during Mac memory pressure to the PC
+- [x] Shims + MCP tools for docker, node/npm/pnpm (opt-in per project via `.pcbridge` file) and generic `pc_run_task`
+- [x] Path mapping Mac ⇄ PC (shared folders → `workspace\<name>\…`)
+- [x] Smart router (Mac est. vs PC est. + transfer + queue; learns from SQLite history)
+- [x] Python GPU detection (torch/diffusers/whisper/comfy/marker)
+- [x] ffmpeg NVENC auto-swap (libx264→h264_nvenc, libx265→hevc_nvenc when safe)
+- [x] HTTP client (streaming), Wake-on-LAN magic packet
+- [x] MCP stdio server: pc_run, pc_delegate_task, pc_status, pc_gpu, pc_push_file, pc_pull_file, pc_wake, comfy_generate, ollama_chat
+- [x] Tests: mapping, router, detection, ffmpeg rewrite, MCP protocol, mock-agent e2e
+
+- [x] Claude wiring: MCP entries (Claude Code + Desktop), CLAUDE.md block, shims, PATH — idempotent + backups + undo
+- [x] Real cross-language e2e (`scripts/e2e-real-agent.sh`)
 
 ### Phase 3–4 — App
 - [ ] Wizard framework (what/why/do-it/check/progress/resume)
@@ -76,7 +79,10 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - **2026-11-21** Agent streams NDJSON (one JSON object per line) — simple, proxy-safe, easy to test.
 - **2026-11-21** Scope addition from user: memory-aware routing (RAM-heavy jobs + Mac memory pressure → PC).
 - **2026-11-21** Node/Docker shims are opt-in per project: a `.pcbridge` file in the project with `offload = ["npm","docker"]` — avoids surprising redirection of everyday commands.
+- **2026-11-21** Real-agent e2e found that POSIX agent roots (tests, WSL2 mode) need `/` paths and keep `python3`; fixed in `PathMapper`/`plan`.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations
-_(filled in as discovered)_
+- Files a job opens **without naming them on the command line** (e.g. a script reading `data.csv` internally) reach the PC only through Syncthing; files named in the command are pushed automatically if missing.
+- Wake-on-LAN works only when the Mac is on the same home network as the PC (Tailscale can't carry the wake signal).
+- Node/Docker offload needs the project's dependencies installed on the PC side (Windows `node_modules` are not synced from the Mac).

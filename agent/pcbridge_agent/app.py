@@ -282,6 +282,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 f.write(chunk)
         return {"ok": True, "path": dest.relative_to(root).as_posix(), "bytes": dest.stat().st_size}
 
+    @app.get("/files/stat", dependencies=[Depends(auth)])
+    async def files_stat(path: str):
+        p = safe_path(root, path)
+        if not p.is_file():
+            return {"exists": False}
+        st = p.stat()
+        return {"exists": True, "size": st.st_size, "mtime": st.st_mtime}
+
     @app.get("/files/pull", dependencies=[Depends(auth)])
     async def files_pull(path: str):
         src = safe_path(root, path)
