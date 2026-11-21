@@ -248,9 +248,19 @@ impl AgentClient {
         if let Some(d) = local.parent() {
             std::fs::create_dir_all(d).map_err(|e| ClientError::Other(e.to_string()))?;
         }
-        let tmp = local.with_extension("pcbridge-part");
+        let mut tmp_name = local.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(format!(".{}.pcbridge-part", std::process::id()));
+        let tmp = local.with_file_name(tmp_name);
         let mut f = std::fs::File::create(&tmp).map_err(|e| ClientError::Other(e.to_string()))?;
-        let n = r.copy_to(&mut f).map_err(map_err)?;
+        let n = match r.copy_to(&mut f) {
+            Ok(n) => n,
+            Err(e) => {
+                drop(f);
+                let _ = std::fs::remove_file(&tmp);
+                return Err(map_err(e));
+            }
+        };
+        drop(f);
         std::fs::rename(&tmp, local).map_err(|e| ClientError::Other(e.to_string()))?;
         Ok(n)
     }

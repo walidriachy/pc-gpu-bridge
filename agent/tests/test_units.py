@@ -259,6 +259,9 @@ def test_syncthing_calls(tmp_path):
     assert all(c[2] == "k" for c in calls)
     folder_body = next(c[3] for c in calls if "/config/folders/" in c[1])
     assert {d["deviceID"] for d in folder_body["devices"]} == {"MAC-ID", "PC-ID"}
+    assert folder_body["versioning"]["type"] == "trashcan"  # overwritten files are kept 14 days
+    ignores = next(c[3] for c in calls if "/db/ignores" in c[1])["ignore"]
+    assert ".git" in ignores and ".claude" in ignores
 
 
 def test_resolve_claude_finds_native_install_off_path(tmp_path, monkeypatch):

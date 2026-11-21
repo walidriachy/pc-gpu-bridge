@@ -56,10 +56,8 @@ pub async fn check(app: &AppHandle, install: bool) -> Result<Value, String> {
     if pc_is_busy() {
         return Ok(json!({"available": true, "current": current, "version": version, "waiting": "a job is running"}));
     }
-    let bytes = update
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| format!("Couldn't download version {version}: {e}"))?;
+    let bytes =
+        update.download(|_, _| {}, || {}).await.map_err(|e| format!("Couldn't download version {version}: {e}"))?;
     // A job may have started during the download: wait for it instead of cutting it off.
     let idle = tauri::async_runtime::spawn_blocking(|| wait_until_idle(MAX_IDLE_WAIT)).await.unwrap_or(false);
     if !idle {

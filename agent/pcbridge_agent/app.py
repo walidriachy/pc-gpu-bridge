@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import platform
 import shutil
 import socket
@@ -463,9 +464,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def files_push(path: str = Form(...), file: UploadFile = File(...)):
         dest = safe_path(root, path)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with open(dest, "wb") as f:
-            while chunk := await file.read(1 << 20):
-                f.write(chunk)
+        # Write next to it under a name Syncthing ignores, then swap it in, so a half-sent file
+        # is never seen by a job or synced back to the Mac.
+        part = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.pcbridge-part")
+        try:
+            with open(part, "wb") as f:
+                while chunk := await file.read(1 << 20):
+                    f.write(chunk)
+            os.replace(part, dest)
+        finally:
+            part.unlink(missing_ok=True)
         return {"ok": True, "path": dest.relative_to(root).as_posix(), "bytes": dest.stat().st_size}
 
     @app.get("/files/stat", dependencies=[Depends(auth)])

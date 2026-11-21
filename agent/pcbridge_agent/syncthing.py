@@ -18,7 +18,14 @@ DEFAULT_IGNORES = [
     "__pycache__",
     "(?d).DS_Store",
     "*.pcbridge-part",
+    ".git",  # two computers writing one Git repo at once can corrupt it
+    ".claude",  # each computer's own Claude Code settings and session state
 ]
+
+# Overwritten or deleted files go to the folder's .stversions bin for 14 days instead of vanishing.
+VERSIONING = {"type": "trashcan", "params": {"cleanoutDays": "14"}}
+# Seconds Syncthing waits after a change before sending it (its default is 10).
+WATCH_DELAY_S = 2
 
 
 class SyncthingError(RuntimeError):
@@ -73,7 +80,9 @@ class Syncthing:
                 "type": "sendreceive",
                 "devices": [{"deviceID": d} for d in devices],
                 "fsWatcherEnabled": True,
+                "fsWatcherDelayS": WATCH_DELAY_S,
                 "rescanIntervalS": 60,
+                "versioning": VERSIONING,
             },
         )
         self._call("POST", f"/rest/db/ignores?folder={folder_id}", {"ignore": DEFAULT_IGNORES})

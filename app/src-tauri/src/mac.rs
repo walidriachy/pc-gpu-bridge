@@ -467,10 +467,19 @@ pub async fn share_folders(folders: Vec<String>, state: State<'_, AppState>) -> 
         }
         cfg.shared_folders = list.clone();
         cfg.save().map_err(|e| e.to_string())?;
+        apply_sharing(&state, &mut cfg)
+    })
+    .await
+}
 
-        let st = ensure_local_syncthing(&state, &mut cfg)?;
+/// Set up (or refresh) the shared folders on both computers' Syncthing. Safe to repeat: it is also
+/// run at start so folders shared by an older version pick up new settings (ignores, versioning).
+pub fn apply_sharing(state: &AppState, cfg: &mut BridgeConfig) -> Result<Value, String> {
+    let list = cfg.shared_folders.clone();
+    {
+        let st = ensure_local_syncthing(state, cfg)?;
         let mac_id = st.device_id()?;
-        let c = client(&cfg).ok_or("Pair with the PC first")?;
+        let c = client(cfg).ok_or("Pair with the PC first")?;
         let names: Vec<String> = list.iter().map(|f| f.name.clone()).collect();
         let r = c
             .post_json(
@@ -484,8 +493,7 @@ pub async fn share_folders(folders: Vec<String>, state: State<'_, AppState>) -> 
             st.share_folder(&f.name, Path::new(&f.mac_path), std::slice::from_ref(&pc_id))?;
         }
         Ok(json!({"folders": list, "mac_device_id": mac_id, "pc_device_id": pc_id}))
-    })
-    .await
+    }
 }
 
 // ---------------------------------------------------------------- Claude connection

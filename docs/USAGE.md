@@ -138,7 +138,7 @@ offload = ["npm", "pnpm", "docker"]
 
 Even then, only heavy work goes to the PC: `npm/pnpm test` and `build`, `run` scripts whose name contains `build`, `test` or `e2e`, `next build`, and `docker build`, `run`, `compose` and `buildx`. `npm install`, `npm run dev` and similar stay on the Mac.
 
-**Requirement:** the project's dependencies must exist on the PC too. Run `pc-bridge run -- npm ci` once in the project, because Mac `node_modules` aren't synced.
+**Requirement:** the project's dependencies must exist on the PC too. Run `pc-bridge run -- npm ci` once in the project, because Mac `node_modules` aren't synced. `.git`, `.claude`, `.venv`, `.next` and `__pycache__` aren't synced either. If a synced file gets overwritten or deleted by mistake, its previous copy stays for 14 days in the hidden `.stversions` folder inside the shared folder.
 
 ## Hints inside Python scripts
 

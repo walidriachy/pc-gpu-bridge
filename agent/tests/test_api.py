@@ -135,6 +135,11 @@ def test_files_push_pull(env):
     assert c.get("/files/pull", params={"path": "workspace/nope.txt"}).status_code == 404
     assert c.get("/files/stat", params={"path": "workspace/up/hello.txt"}).json()["size"] == 8
     assert c.get("/files/stat", params={"path": "workspace/none"}).json() == {"exists": False}
+    # Replacing a file leaves no partial copy behind.
+    c.post("/files/push", data={"path": "workspace/up/hello.txt"}, files={"file": ("h.txt", b"v2")})
+    up = env["root"] / "workspace" / "up"
+    assert sorted(p.name for p in up.iterdir()) == ["hello.txt"]
+    assert (up / "hello.txt").read_bytes() == b"v2"
 
 
 def test_delegate_real_stream_json(env, tmp_path):

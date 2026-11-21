@@ -7,7 +7,17 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 pub const API_ADDR: &str = "127.0.0.1:8385";
-pub const IGNORES: &[&str] = &["node_modules", ".next", ".venv", "__pycache__", "(?d).DS_Store", "*.pcbridge-part"];
+/// Never synced. `.git`: two computers writing one repository at once can corrupt it.
+/// `.claude`: each computer's own Claude Code settings and session state.
+pub const IGNORES: &[&str] =
+    &["node_modules", ".next", ".venv", "__pycache__", "(?d).DS_Store", "*.pcbridge-part", ".git", ".claude"];
+/// Seconds Syncthing waits after a change before sending it (its default is 10).
+pub const WATCH_DELAY_S: u64 = 2;
+
+/// Overwritten or deleted files go to the folder's `.stversions` bin for 14 days instead of vanishing.
+pub fn versioning() -> Value {
+    json!({"type": "trashcan", "params": {"cleanoutDays": "14"}})
+}
 
 pub fn folder_id(name: &str) -> String {
     let safe: String = name.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
@@ -71,7 +81,8 @@ impl Syncthing {
             Some(json!({
                 "id": id, "label": name, "path": path.display().to_string(), "type": "sendreceive",
                 "devices": devices.iter().map(|d| json!({"deviceID": d})).collect::<Vec<_>>(),
-                "fsWatcherEnabled": true, "rescanIntervalS": 60
+                "fsWatcherEnabled": true, "fsWatcherDelayS": WATCH_DELAY_S, "rescanIntervalS": 60,
+                "versioning": versioning()
             })),
         )?;
         self.call(reqwest::Method::POST, &format!("/rest/db/ignores?folder={id}"), Some(json!({"ignore": IGNORES})))

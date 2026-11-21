@@ -86,7 +86,10 @@ fn run_gui(minimized: bool) {
                 std::thread::spawn(move || {
                     let mut cfg = BridgeConfig::load();
                     if !cfg.shared_folders.is_empty() && !cfg.syncthing_api_key.is_empty() {
-                        let _ = mac::ensure_local_syncthing(&st, &mut cfg);
+                        // Refresh both sides' folder settings; if the PC is off, just start ours.
+                        if mac::apply_sharing(&st, &mut cfg).is_err() {
+                            let _ = mac::ensure_local_syncthing(&st, &mut cfg);
+                        }
                     }
                 });
                 std::thread::spawn(mac::claim_device_once);
