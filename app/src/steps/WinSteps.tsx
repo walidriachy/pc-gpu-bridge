@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errText, type WinState } from "../lib/api";
 import { CheckResult, CopyBox, useAction, type CheckState } from "../components/ui";
+import { InstallStatus, usePrograms, useProgramInstall, WHERE_PROGRAMS_GO } from "../components/Programs";
+import { driveName, hasRoom, sizeText, spaceNeededGb } from "../lib/format";
 import type { StepCtx, StepDef } from "../components/Wizard";
 
 function useWinState(): [WinState | null, (s: WinState) => void] {
@@ -39,7 +41,7 @@ function Welcome({ setDone }: StepCtx) {
         <li><strong>Python</strong> — runs the PC Bridge helper and AI scripts</li>
         <li><strong>Syncthing</strong> — keeps shared folders identical on both computers</li>
         <li><strong>Claude Code</strong> — a “worker Claude” that can do whole tasks on this PC</li>
-        <li>Optional: <strong>Ollama</strong> (local AI chat models) and <strong>ComfyUI</strong> (image/video generation)</li>
+        <li>Optional: <strong>Ollama</strong> (local AI chat models), <strong>PyTorch</strong> (AI in Python) and <strong>ComfyUI</strong> (image/video generation)</li>
       </ul>
     </div>
   );
@@ -212,6 +214,57 @@ function ClaudeStep({ setDone }: StepCtx) {
   );
 }
 
+function PytorchOption({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  const progs = usePrograms();
+  const torch = useProgramInstall(() => {
+    progs.reload();
+  });
+  const [missing, setMissing] = useState(false);
+  const info = progs.info;
+  const p = info?.programs.find((x) => x.key === "pytorch");
+  const roomy = !info || !p || hasRoom(info.free_gb, p.size_gb);
+  const install = async () => {
+    const latest = info ?? (await progs.reload());
+    const prog = latest?.programs.find((x) => x.key === "pytorch");
+    setMissing(!!latest && !prog);
+    if (prog) await torch.install(prog, latest);
+  };
+  return (
+    <div className="option">
+      <label className="check-row">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        <span><strong>PyTorch (GPU)</strong> — needed for AI in Python, like Whisper (speech to text) and Stable Diffusion. It's big ({sizeText(p?.size_gb ?? 6)}).</span>
+      </label>
+      {checked && (
+        <div>
+          {p?.installed ? (
+            <CheckResult state={{ status: "ok", message: "PyTorch is installed and can use your graphics card." }} />
+          ) : (
+            <>
+              <button className="btn" disabled={!!torch.busy || !roomy} onClick={install}>
+                {torch.busy ? "Installing…" : "Install PyTorch"}
+              </button>
+              {info && p && (
+                <p className={roomy ? "muted small" : "advice"}>
+                  {roomy
+                    ? `Free space on the ${driveName(info.drive)} drive: ${info.free_gb >= 0 ? `${info.free_gb} GB` : "unknown"} (needs about ${spaceNeededGb(p.size_gb)} GB).`
+                    : `⚠️ Not enough free space: ${info.free_gb} GB free on the ${driveName(info.drive)} drive, about ${spaceNeededGb(p.size_gb)} GB needed. Free up space in Windows Settings → System → Storage, then come back.`}
+                </p>
+              )}
+              <InstallStatus state={torch.states.pytorch} />
+              {!torch.states.pytorch && progs.error && <CheckResult state={{ status: "fail", message: progs.error }} />}
+              {missing && (
+                <CheckResult state={{ status: "fail", message: "The helper on this PC is out of date.", fix: "Go back to step 4 and click “Install everything” again to update it." }} />
+              )}
+            </>
+          )}
+          <p className="muted small">{WHERE_PROGRAMS_GO}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OptionalStep({ setDone }: StepCtx) {
   const [ws, save] = useWinState();
   const ollama = useAction<any>();
@@ -231,6 +284,7 @@ function OptionalStep({ setDone }: StepCtx) {
           </>
         )}
       </div>
+      <PytorchOption checked={!!ws.want_pytorch} onChange={(v) => save({ ...ws, want_pytorch: v })} />
       <div className="option">
         <label className="check-row">
           <input type="checkbox" checked={ws.want_comfy} onChange={(e) => save({ ...ws, want_comfy: e.target.checked })} />

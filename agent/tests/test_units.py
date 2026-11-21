@@ -353,9 +353,9 @@ def test_agent_keeps_answering_while_a_job_scans_a_big_folder(tmp_path, monkeypa
 
     real = jobs_mod.snapshot
 
-    def slow_snapshot(folder):
+    def slow_snapshot(*args, **kwargs):
         time.sleep(1.0)
-        return real(folder)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(jobs_mod, "snapshot", slow_snapshot)
 

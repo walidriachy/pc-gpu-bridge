@@ -55,6 +55,168 @@ pub fn set_redirect(enabled: bool, app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+// ---------------------------------------------------------------- Install location (Gatekeeper)
+
+/// Where the Mac app should live. Updates, the Claude connection and the helper commands use this path.
+pub const APPLICATIONS_APP: &str = "/Applications/PC Bridge.app";
+
+/// What to do about where the Mac app is running from.
+///
+/// When a downloaded app is opened while it still carries the "downloaded from the internet" mark
+/// (`com.apple.quarantine`), macOS runs a read-only copy from a random hidden folder
+/// (".../AppTranslocation/..."). Updates can't replace that copy and the paths given to Claude stop
+/// working, so PC Bridge moves itself back to Applications.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InstallFix {
+    Nothing,
+    /// Running from Applications, but the download mark is still on it: remove the mark.
+    ClearQuarantine,
+    /// Running from the hidden read-only copy and PC Bridge is in Applications: remove the mark from
+    /// the Applications copy, open that one and quit this one.
+    RelaunchFromApplications,
+    /// PC Bridge isn't in Applications: ask the user to drag it there.
+    AskToMove,
+}
+
+/// Decide what to do from the running program's path, whether `/Applications/PC Bridge.app` carries
+/// the download mark, whether `/Applications/PC Bridge.app` exists, and whether it is this same
+/// version. No side effects.
+pub fn install_fix(
+    exe: &str,
+    has_quarantine: bool,
+    applications_copy_exists: bool,
+    applications_is_this_version: bool,
+) -> InstallFix {
+    if cc::is_translocated(exe) {
+        // The user already said "Open" in the macOS security prompt for this version, so removing
+        // the mark from the same version in Applications is safe. A different (older) version
+        // there, for example when the new download was opened straight from the .dmg: ask the
+        // user to drag this one into Applications instead of starting the old one.
+        return if applications_copy_exists && applications_is_this_version {
+            InstallFix::RelaunchFromApplications
+        } else {
+            InstallFix::AskToMove
+        };
+    }
+    if exe.starts_with(&format!("{APPLICATIONS_APP}/")) {
+        return if has_quarantine { InstallFix::ClearQuarantine } else { InstallFix::Nothing };
+    }
+    if in_an_applications_folder(exe) {
+        // Another copy in /Applications or ~/Applications: updates work there, leave it alone.
+        return InstallFix::Nothing;
+    }
+    // Downloads, Desktop, the opened .dmg (/Volumes/...), ...
+    InstallFix::AskToMove
+}
+
+fn in_an_applications_folder(exe: &str) -> bool {
+    if exe.starts_with("/Applications/") {
+        return true;
+    }
+    // ~/Applications/...: /Users/<name>/Applications/...
+    let mut parts = exe.trim_start_matches('/').split('/');
+    parts.next() == Some("Users") && parts.next().is_some() && parts.next() == Some("Applications")
+}
+
+/// Shown when PC Bridge isn't in Applications.
+pub const MOVE_TO_APPLICATIONS_MSG: &str = "PC Bridge needs to be in your Applications folder.\n\n\
+1. Quit PC Bridge (click the dot in the menu bar, then “Quit PC Bridge”).\n\
+2. Open the file you downloaded (PC Bridge.dmg) and drag PC Bridge onto the Applications folder \
+(if your Mac asks, choose “Replace”).\n\
+3. Open PC Bridge from Applications.\n\n\
+This lets PC Bridge update itself and lets Claude find it.";
+
+/// Shown when PC Bridge couldn't move itself back to Applications.
+pub const REOPEN_FROM_APPLICATIONS_MSG: &str =
+    "PC Bridge couldn't finish setting itself up in your Applications folder.\n\n\
+Please quit PC Bridge (menu bar dot → “Quit PC Bridge”) and open it again from Applications. \
+If this message comes back, drag PC Bridge from Applications to the Trash, then drag it into \
+Applications again from the file you downloaded (PC Bridge.dmg).";
+
+/// `CFBundleShortVersionString` from an app's `Info.plist` (XML, as Tauri writes it).
+pub fn plist_version(plist: &str) -> Option<String> {
+    let after = &plist[plist.find("<key>CFBundleShortVersionString</key>")?..];
+    let start = after.find("<string>")? + "<string>".len();
+    let end = after[start..].find("</string>")?;
+    Some(after[start..start + end].trim().to_string())
+}
+
+/// Whether the app in Applications is this same version (an unreadable one counts as different).
+fn applications_is_this_version(bundle: &Path) -> bool {
+    std::fs::read_to_string(bundle.join("Contents/Info.plist"))
+        .ok()
+        .and_then(|s| plist_version(&s))
+        .is_some_and(|v| v == env!("CARGO_PKG_VERSION"))
+}
+
+/// Claude's connection and the helper commands may still point at the hidden temporary copy that
+/// 0.1.2 ran from (it vanishes at the next restart): point them at this copy again.
+fn repair_claude_paths() {
+    let exe = exe_path();
+    if !cc::is_translocated(&exe) {
+        let _ = cc::repair_translocated(&user_home(), &home_dir().join("bin"), &exe, detect::SHIM_TOOLS);
+    }
+}
+
+fn has_quarantine(bundle: &Path) -> bool {
+    bundle.exists() && run("/usr/bin/xattr", &["-p", "com.apple.quarantine", &bundle.display().to_string()]).ok()
+}
+
+fn clear_quarantine(bundle: &Path) {
+    let _ = run("/usr/bin/xattr", &["-dr", "com.apple.quarantine", &bundle.display().to_string()]);
+}
+
+fn ask_to_move(app: &tauri::AppHandle, msg: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message(msg)
+        .title("Move PC Bridge to Applications")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("Open Applications folder".into(), "Later".into()))
+        .show(|open| {
+            if open {
+                let _ = run("open", &["/Applications"]);
+            }
+        });
+}
+
+/// Mac release builds only: make sure PC Bridge runs from `/Applications/PC Bridge.app`.
+/// Called first thing at startup. May quit this process (after starting the Applications copy).
+pub fn heal_install_location(app: &tauri::AppHandle, minimized: bool) {
+    if !cfg!(target_os = "macos") || cfg!(debug_assertions) {
+        return;
+    }
+    let target = Path::new(APPLICATIONS_APP);
+    let same = applications_is_this_version(target);
+    match install_fix(&exe_path(), has_quarantine(target), target.exists(), same) {
+        InstallFix::Nothing => repair_claude_paths(),
+        InstallFix::ClearQuarantine => {
+            clear_quarantine(target);
+            repair_claude_paths();
+        }
+        InstallFix::RelaunchFromApplications => {
+            clear_quarantine(target);
+            if has_quarantine(target) {
+                // Opening it again would land in the hidden copy again (and loop): explain instead.
+                ask_to_move(app, REOPEN_FROM_APPLICATIONS_MSG);
+                return;
+            }
+            // Wait a moment so this copy has quit before the Applications copy starts (only one
+            // PC Bridge can run at a time).
+            let script = if minimized {
+                "sleep 1; exec /usr/bin/open -n \"$0\" --args --minimized"
+            } else {
+                "sleep 1; exec /usr/bin/open -n \"$0\""
+            };
+            if crate::util::command("/bin/sh").args(["-c", script, APPLICATIONS_APP]).spawn().is_ok() {
+                std::process::exit(0);
+            }
+            ask_to_move(app, REOPEN_FROM_APPLICATIONS_MSG);
+        }
+        InstallFix::AskToMove => ask_to_move(app, MOVE_TO_APPLICATIONS_MSG),
+    }
+}
+
 // ---------------------------------------------------------------- Tailscale
 
 pub fn tailscale_bin() -> Option<String> {
@@ -603,5 +765,70 @@ mod tests {
         assert_eq!(tailscale_fix(Some("Running"), false), TailscaleFix::Nothing);
         assert_eq!(tailscale_fix(Some("NeedsLogin"), false), TailscaleFix::Nothing);
         assert_eq!(tailscale_fix(Some("Starting"), false), TailscaleFix::Nothing);
+    }
+
+    const TRANSLOCATED: &str =
+        "/private/var/folders/xy/abc123/T/AppTranslocation/0F1E2D3C-4B5A/d/PC Bridge.app/Contents/MacOS/pc-bridge";
+    const INSTALLED: &str = "/Applications/PC Bridge.app/Contents/MacOS/pc-bridge";
+
+    #[test]
+    fn translocated_app_relaunches_from_applications() {
+        // Quarantined Applications copy (the 0.1.2 "Open Anyway" case) and an already clean one.
+        assert_eq!(install_fix(TRANSLOCATED, true, true, true), InstallFix::RelaunchFromApplications);
+        assert_eq!(install_fix(TRANSLOCATED, false, true, true), InstallFix::RelaunchFromApplications);
+    }
+
+    #[test]
+    fn translocated_app_without_applications_copy_asks_to_move() {
+        assert_eq!(install_fix(TRANSLOCATED, false, false, false), InstallFix::AskToMove);
+    }
+
+    #[test]
+    fn translocated_new_version_never_starts_an_older_copy_in_applications() {
+        // 0.1.3 opened straight from the .dmg while 0.1.2 is in Applications.
+        assert_eq!(install_fix(TRANSLOCATED, true, true, false), InstallFix::AskToMove);
+        assert_eq!(install_fix(TRANSLOCATED, false, true, false), InstallFix::AskToMove);
+    }
+
+    #[test]
+    fn reads_the_version_from_info_plist() {
+        let plist = "<plist><dict><key>CFBundleName</key><string>PC Bridge</string>\n\
+                     <key>CFBundleShortVersionString</key>\n  <string>0.1.3</string></dict></plist>";
+        assert_eq!(plist_version(plist).as_deref(), Some("0.1.3"));
+        assert_eq!(plist_version("<plist><dict></dict></plist>"), None);
+    }
+
+    #[test]
+    fn applications_copy_with_download_mark_is_cleaned_in_place() {
+        assert_eq!(install_fix(INSTALLED, true, true, true), InstallFix::ClearQuarantine);
+        assert_eq!(install_fix(INSTALLED, false, true, true), InstallFix::Nothing);
+    }
+
+    #[test]
+    fn other_applications_folders_are_left_alone() {
+        assert_eq!(
+            install_fix("/Users/sam/Applications/PC Bridge.app/Contents/MacOS/pc-bridge", true, false, false),
+            InstallFix::Nothing
+        );
+        assert_eq!(
+            install_fix("/Applications/Utilities/PC Bridge.app/Contents/MacOS/pc-bridge", false, false, false),
+            InstallFix::Nothing
+        );
+    }
+
+    #[test]
+    fn running_from_downloads_or_the_dmg_asks_to_move() {
+        for exe in [
+            "/Users/sam/Downloads/PC Bridge.app/Contents/MacOS/pc-bridge",
+            "/Volumes/PC Bridge/PC Bridge.app/Contents/MacOS/pc-bridge",
+            "/Users/sam/Downloads/Applications/PC Bridge.app/Contents/MacOS/pc-bridge",
+        ] {
+            assert_eq!(install_fix(exe, false, false, false), InstallFix::AskToMove, "{exe}");
+        }
+        // A look-alike folder name must not count as /Applications/PC Bridge.app.
+        assert_eq!(
+            install_fix("/Applications/PC Bridge.app.old/Contents/MacOS/pc-bridge", true, true, true),
+            InstallFix::Nothing
+        );
     }
 }

@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_OUTPUT: usize = 20_000;
 
+/// Programs the PC agent knows how to install (`pc_install`); keys match the agent's catalog.
+pub const KNOWN_PROGRAMS: &[&str] = &["ffmpeg", "blender", "pytorch", "ollama", "node", "docker", "git"];
+
 /// Split a command line into words, honouring single/double quotes and backslash escapes.
 pub fn split_command(s: &str) -> Vec<String> {
     let mut out = vec![];
@@ -60,6 +63,38 @@ fn tail(s: &str) -> String {
     format!("…(earlier output trimmed)…\n{}", &s[start..])
 }
 
+/// The last `n` lines of `s`.
+fn last_lines(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// "Programs on the PC: installed … · not installed …", from the `tools` map in the PC's /status.
+pub fn programs_summary(status: &Value) -> Option<String> {
+    let tools = status.get("tools")?.as_object()?;
+    let (mut have, mut missing) = (vec![], vec![]);
+    for &key in KNOWN_PROGRAMS {
+        let found = match key {
+            "pytorch" => tools.get("pytorch").or_else(|| tools.get("torch")),
+            k => tools.get(k),
+        };
+        match found.and_then(|v| v.as_bool()) {
+            Some(true) => have.push(key),
+            Some(false) => missing.push(key),
+            None => {}
+        }
+    }
+    if have.is_empty() && missing.is_empty() {
+        return None;
+    }
+    let list = |v: &[&str]| if v.is_empty() { "none".to_string() } else { v.join(", ") };
+    let mut line = format!("Programs on the PC: installed: {} · not installed: {}", list(&have), list(&missing));
+    if !missing.is_empty() {
+        line.push_str(" (pc_install can add them, after asking the user)");
+    }
+    Some(line)
+}
+
 fn str_arg<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
     args.get(k).and_then(|v| v.as_str())
 }
@@ -94,7 +129,9 @@ fn tool_defs() -> Value {
          "inputSchema": {"type": "object", "properties": {"tool": {"type": "string", "enum": ["npm", "pnpm", "npx", "node"]}, "args": {"type": "string"}, "cwd": cwd}, "required": ["tool", "args"]}},
         {"name": "pc_delegate_task", "description": "Hand a whole task to the worker Claude running on the PC (claude -p). Good for long GPU workflows that need several steps. Returns the worker's final answer and its job folder.",
          "inputSchema": {"type": "object", "properties": {"task": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}, "description": "Mac files (in shared folders) to give the worker"}}, "required": ["task"]}},
-        {"name": "pc_status", "description": "Is the PC online? Queue, running jobs, installed tools, and Mac vs PC free memory.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "pc_status", "description": "Is the PC online? Queue, running jobs, which programs are installed on the PC, and Mac vs PC free memory.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "pc_install", "description": "Install a program on the user's Windows PC, in its normal Windows location (never in the shared folders). Known programs: ffmpeg, blender, pytorch, ollama, node, docker, git. Use it when a PC job failed because a program is missing: check pc_status or the job's error first. ASK THE USER FIRST and only install after they say yes. Some installers show a Windows \"Yes\" prompt on the PC's screen that someone at the PC must click, so tell the user. Installs can take several minutes (PyTorch is about 6 GB).",
+         "inputSchema": {"type": "object", "properties": {"program": {"type": "string", "description": "One of: ffmpeg, blender, pytorch, ollama, node, docker, git"}}, "required": ["program"]}},
         {"name": "pc_gpu", "description": "GPU usage, VRAM and temperature on the PC.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "pc_memory", "description": "Mac vs PC free RAM side by side, plus the Mac's memory pressure level.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "pc_route_advice", "description": "Ask the smart router whether a command would be faster on the Mac or the PC, without running it.",
@@ -155,6 +192,11 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
         }
         for n in &io.notes {
             msg.push_str(&format!("Note: {n}\n"));
+        }
+        if let Some(p) = &r.missing {
+            msg.push_str(&format!(
+                "Note: {p} isn't installed on the PC. Ask the user, then install it with pc_install (program \"{p}\").\n"
+            ));
         }
         if !io.stdout.is_empty() {
             msg.push_str(&format!("\n--- stdout ---\n{}", tail(&io.stdout)));
@@ -274,6 +316,9 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                         gb(&s["memory"]["total_bytes"])
                     ));
                     if name == "pc_status" {
+                        if let Some(line) = programs_summary(&s) {
+                            msg.push_str(&format!("{line}\n"));
+                        }
                         msg.push_str(&format!("\nPC status:\n{}", serde_json::to_string_pretty(&s).unwrap()));
                     }
                     text(msg)
@@ -283,6 +328,40 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                     error(msg)
                 }
                 None => error(msg + "PC: not paired yet"),
+            }
+        }
+        "pc_install" => {
+            let Some(program) = str_arg(args, "program").map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty())
+            else {
+                return error(format!("program is required (one of: {})", KNOWN_PROGRAMS.join(", ")));
+            };
+            let Some(client) = &engine.client else {
+                return error("Not paired with a PC yet. Open PC Bridge to set it up.");
+            };
+            if engine.ensure_awake(&mut Capture::default()).is_none() {
+                return error("Can't reach the PC right now. Check it's on and PC Bridge is running there.");
+            }
+            let mut log = String::new();
+            match client.install_program(&program, |ev| {
+                if let Some(d) = ev["data"].as_str() {
+                    log.push_str(d);
+                }
+            }) {
+                Ok(o) if o.exit_code == 0 && o.restart_needed => text(format!(
+                    "{program} is installed on the PC, but the PC must restart to finish the install. \
+                     Ask the user to restart the PC before using it.\n\n{}",
+                    last_lines(&log, 10)
+                )),
+                Ok(o) if o.exit_code == 0 => {
+                    text(format!("{program} is now installed on the PC ({:.0}s).\n\n{}", o.duration, last_lines(&log, 10)))
+                }
+                Ok(o) => error(format!(
+                    "Installing {program} on the PC failed (exit code {}). If Windows showed a \"Yes\" prompt on the PC, \
+                     someone has to click it there.\nLast lines from the installer:\n{}",
+                    o.exit_code,
+                    last_lines(&log, 15)
+                )),
+                Err(e) => error(format!("Couldn't install {program} on the PC: {e}")),
             }
         }
         "pc_gpu" => match engine.client.as_ref().map(|c| c.gpu()) {
@@ -400,7 +479,7 @@ pub fn handle(engine: &Engine, msg: &Value) -> Option<Value> {
                 "protocolVersion": requested,
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "pc-bridge", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "PC Bridge sends heavy work (GPU encodes, AI inference, renders, RAM-heavy builds) from this Mac to the user's Windows PC (NVIDIA GPU, usually much more free RAM than the Mac; pc_gpu and pc_memory give exact figures). Prefer pc_run for single commands and pc_delegate_task for multi-step GPU workflows. Keep light edits and git on the Mac."
+                "instructions": "PC Bridge sends heavy work (GPU encodes, AI inference, renders, RAM-heavy builds) from this Mac to the user's Windows PC (NVIDIA GPU, usually much more free RAM than the Mac; pc_gpu and pc_memory give exact figures). Prefer pc_run for single commands and pc_delegate_task for multi-step GPU workflows. Keep light edits and git on the Mac. If a PC job fails because a program is missing there, ask the user before installing it with pc_install."
             })
         }
         "ping" => json!({}),
@@ -491,9 +570,18 @@ mod tests {
             "pc_node_build",
             "pc_memory",
             "pc_route_advice",
+            "pc_install",
         ] {
             assert!(names.contains(&n), "missing {n}");
         }
+        assert_eq!(names.len(), 15, "{names:?}");
+        let install = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "pc_install").unwrap();
+        let desc = install["description"].as_str().unwrap();
+        assert!(desc.contains("ASK THE USER FIRST") && desc.contains("never in the shared folders"), "{desc}");
+        for k in KNOWN_PROGRAMS {
+            assert!(desc.contains(k), "pc_install description should list {k}");
+        }
+        assert_eq!(install["inputSchema"]["required"], json!(["program"]));
         let bad = handle(&e, &json!({"jsonrpc": "2.0", "id": 3, "method": "nope"})).unwrap();
         assert_eq!(bad["error"]["code"], -32601);
     }
@@ -510,6 +598,34 @@ mod tests {
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Not paired"));
         let r = call_tool(&e, "pc_node_build", &json!({"tool": "rm", "args": "-rf /"}));
         assert_eq!(r["isError"], true);
+        let r = call_tool(&e, "pc_install", &json!({"program": "ffmpeg"}));
+        assert_eq!(r["isError"], true);
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("Not paired"));
+        let r = call_tool(&e, "pc_install", &json!({"program": "  "}));
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("program is required"));
+    }
+
+    #[test]
+    fn programs_summary_from_status_tools() {
+        let s = json!({"tools": {"ffmpeg": true, "blender": false, "node": true, "npm": true, "claude": true}});
+        assert_eq!(
+            programs_summary(&s).unwrap(),
+            "Programs on the PC: installed: ffmpeg, node · not installed: blender (pc_install can add them, after asking the user)"
+        );
+        let s = json!({"tools": {"ffmpeg": true, "torch": true}});
+        assert_eq!(
+            programs_summary(&s).unwrap(),
+            "Programs on the PC: installed: ffmpeg, pytorch · not installed: none"
+        );
+        // What the 0.1.3 agent sends: Blender found in its install folder, plus PyTorch and Git.
+        let s = json!({"tools": {"ffmpeg": true, "blender": true, "pytorch": false, "git": false, "node": true}});
+        assert_eq!(
+            programs_summary(&s).unwrap(),
+            "Programs on the PC: installed: ffmpeg, blender, node · not installed: pytorch, git (pc_install can add them, after asking the user)"
+        );
+        assert!(programs_summary(&json!({"tools": {"claude": true}})).is_none());
+        assert!(programs_summary(&json!({})).is_none());
+        assert_eq!(last_lines("a\n\nb\nc\n", 2), "b\nc");
     }
 
     #[test]

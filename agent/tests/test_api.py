@@ -186,3 +186,108 @@ def test_new_pairing_code_needs_auth(env):
     assert anon.post("/pair/new").status_code == 401
     code = env["client"].post("/pair/new").json()["code"]
     assert code == env["client"].get("/pair/code").json()["code"]
+
+
+# ---------------- programs on the PC ----------------
+
+
+def test_programs_list_shape(env, monkeypatch):
+    from pcbridge_agent import programs
+
+    monkeypatch.setattr(programs, "is_installed", lambda p: p.key == "git")
+    body = env["client"].get("/programs").json()
+    assert set(body) == {"programs", "free_gb", "drive"}
+    keys = [p["key"] for p in body["programs"]]
+    assert {"ffmpeg", "blender", "pytorch", "ollama", "node", "docker", "git"} <= set(keys)
+    for p in body["programs"]:
+        assert set(p) == {"key", "name", "why", "size_gb", "installed"}
+        assert p["installed"] is (p["key"] == "git")
+    assert isinstance(body["free_gb"], float) and body["drive"]
+    assert TestClient(env["app"]).get("/programs").status_code == 401
+
+
+def test_install_unknown_program_is_404(env):
+    r = env["client"].post("/programs/install", json={"program": "photoshop"})
+    assert r.status_code == 404
+    assert "photoshop" in r.json()["detail"] and "blender" in r.json()["detail"]
+
+
+def test_install_refused_when_disk_is_low(env, monkeypatch):
+    from pcbridge_agent import programs
+
+    monkeypatch.setattr(programs, "free_gb", lambda path=None: 1.0)
+    called = []
+    monkeypatch.setattr(programs, "install_argv", lambda p: called.append(p) or ["x"])
+    r = env["client"].post("/programs/install", json={"program": "pytorch"})
+    assert r.status_code == 507
+    detail = r.json()["detail"]
+    assert "PyTorch" in detail and "1.0 GB free" in detail and "8 GB needed" in detail
+    assert not called  # nothing was started
+
+
+def test_install_explains_missing_winget(env, monkeypatch):
+    from pcbridge_agent import programs
+
+    monkeypatch.setattr(programs, "free_gb", lambda path=None: 500.0)
+    monkeypatch.setattr(programs, "which", lambda cmd: None)
+    r = env["client"].post("/programs/install", json={"program": "blender"})
+    assert r.status_code == 503 and "App Installer" in r.json()["detail"]
+
+
+def test_install_job_streams_and_exits_0(env, monkeypatch):
+    from pcbridge_agent import programs
+
+    monkeypatch.setattr(programs, "free_gb", lambda path=None: 500.0)
+    monkeypatch.setattr(programs, "install_argv", lambda p: [sys.executable, "-c", "print('ok')"])
+    r = env["client"].post("/programs/install", json={"program": "Blender.exe"})
+    assert r.status_code == 200
+    evs = ndjson(r)
+    assert evs[0]["type"] == "job" and evs[-1]["type"] == "exit"
+    assert evs[-1]["code"] == 0 and evs[-1]["state"] == "done"
+    assert "ok" in "".join(e.get("data", "") for e in evs if e["type"] == "stdout")
+    job = env["client"].get("/jobs").json()[0]
+    assert job["kind"] == "install" and job["name"] == "install Blender" and job["missing"] is None
+
+
+def test_install_clicked_twice_follows_the_same_job(env, monkeypatch):
+    """Two requests at the same moment (double-click, or Claude and the PC app) share one install."""
+    import asyncio
+    import time
+
+    import httpx
+
+    from pcbridge_agent import programs
+
+    def slow_free_gb(path=None):
+        time.sleep(0.3)  # both requests are past the start of the handler before either job exists
+        return 500.0
+
+    monkeypatch.setattr(programs, "free_gb", slow_free_gb)
+    argv = [sys.executable, "-c", "import time; time.sleep(1)"]
+    monkeypatch.setattr(programs, "install_argv", lambda p: argv)
+    headers = {"Authorization": env["client"].headers["Authorization"]}
+
+    async def main():
+        transport = httpx.ASGITransport(app=env["app"])
+        async with httpx.AsyncClient(transport=transport, base_url="http://agent", headers=headers) as c:
+            body = {"program": "git", "stream": False}
+            return await asyncio.gather(
+                c.post("/programs/install", json=body), c.post("/programs/install", json=body)
+            )
+
+    first, second = asyncio.run(main())
+    assert first.status_code == second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    installs = [j for j in env["client"].get("/jobs").json() if j["kind"] == "install"]
+    assert len(installs) == 1
+
+
+def test_status_lists_programs_like_the_programs_page(env, monkeypatch):
+    """Blender installed outside PATH counts, and PyTorch and Git are reported too."""
+    from pcbridge_agent import programs
+
+    monkeypatch.setattr(programs, "locate", lambda cmd: "C:/Blender/blender.exe" if cmd == "blender" else "")
+    monkeypatch.setattr(programs, "is_installed", lambda p: p.key == "pytorch")
+    tools = env["client"].get("/status").json()["tools"]
+    assert tools["blender"] is True and tools["pytorch"] is True
+    assert tools["git"] is False and tools["ffmpeg"] is False

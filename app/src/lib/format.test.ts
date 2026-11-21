@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanCode, duration, gb, speedup, timeAgo, usedFraction } from "./format";
+import { cleanCode, driveName, duration, gb, hasRoom, sizeText, spaceNeededGb, speedup, timeAgo, usedFraction } from "./format";
 
 describe("format helpers", () => {
   it("formats gigabytes", () => {
@@ -26,5 +26,21 @@ describe("format helpers", () => {
   });
   it("cleans pairing codes", () => {
     expect(cleanCode("12 34-56 7")).toBe("123456");
+  });
+  it("checks free space before installing a program", () => {
+    expect(spaceNeededGb(5)).toBe(7);
+    expect(spaceNeededGb(0.3)).toBe(3);
+    expect(hasRoom(7, 5)).toBe(true);
+    expect(hasRoom(6.9, 5)).toBe(false);
+    expect(hasRoom(-1, 5)).toBe(true);
+  });
+  it("describes program sizes and drives", () => {
+    expect(sizeText(0.3)).toBe("about 300 MB");
+    expect(sizeText(0.2)).toBe("about 200 MB");
+    expect(sizeText(5)).toBe("about 5 GB");
+    expect(sizeText(2.5)).toBe("about 2.5 GB");
+    expect(driveName("C:\\")).toBe("C:");
+    expect(driveName("D:")).toBe("D:");
+    expect(driveName("/")).toBe("/");
   });
 });

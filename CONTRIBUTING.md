@@ -7,6 +7,7 @@ Thanks for helping! Bug reports, docs fixes and pull requests are all welcome.
 * **Beginners are the audience.** Anything a user sees must be in plain English, explain *what* and *why*, and offer a fix when something fails.
 * **Never block the user.** If the PC can't do a job, it falls back to the Mac. Don't add paths that hang or fail silently.
 * **Stay inside the root.** Agent code must use `safe_path` / `check_argv_paths`, so nothing escapes `PCBridge\`.
+* **Installs come only from the catalog.** The agent never builds an install command from request text; add a program to the catalog instead (see below).
 * **Edits to user files must be undoable.** Use idempotent changes with marked blocks and a `.pcbridge-backup` copy (see `claude_config.rs`).
 * **Keep [ROADMAP.md](ROADMAP.md) current.** A PR that changes behaviour updates the roadmap and the changelog in the same PR.
 
@@ -45,7 +46,8 @@ Run the app with hot reload: `cd app && npx tauri dev`.
 |---|---|
 | A new HTTP endpoint on the PC | `agent/pcbridge_agent/app.py` + a test in `agent/tests/test_api.py` |
 | Routing or classification | `crates/bridge-core/src/{router,detect}.rs` + unit tests in the same file |
-| A new Claude tool | `crates/bridge-core/src/mcp.rs` (`tool_defs` + `call_tool`) + docs in `docs/USAGE.md` |
+| A new Claude tool | `crates/bridge-core/src/mcp.rs` (`tool_defs` + `call_tool`) + docs in `docs/USAGE.md`, and update the tool count in `README.md` |
+| A program PC Bridge can install | `CATALOG` (and `ALIASES` if needed) in `agent/pcbridge_agent/programs.py` + a test in `agent/tests/test_programs.py`; the same key in `KNOWN_PROGRAMS` and the `pc_install` description in `crates/bridge-core/src/mcp.rs`; the table in `docs/USAGE.md` |
 | A Mac or Windows system action | `app/src-tauri/src/{mac,win}.rs`, registered in `main.rs` |
 | A screen or wizard step | `app/src/pages/*` or `app/src/steps/*` (each step has `what`, `why`, an action and an automatic check) |
 

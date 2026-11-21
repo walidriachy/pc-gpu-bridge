@@ -38,3 +38,24 @@ export function speedup(pcSecs: number, macSecs: number): string {
 export function cleanCode(input: string): string {
   return input.replace(/\D/g, "").slice(0, 6);
 }
+
+/** Free space (GB) a program needs before installing: its size plus 2 GB of room, like the helper checks. */
+export function spaceNeededGb(sizeGb: number): number {
+  return Math.ceil(sizeGb + 2);
+}
+
+/** True when there's room to install; an unknown free space (negative) never blocks. */
+export function hasRoom(freeGb: number, sizeGb: number): boolean {
+  return freeGb < 0 || freeGb >= sizeGb + 2;
+}
+
+/** "about 300 MB" / "about 2.5 GB" */
+export function sizeText(sizeGb: number): string {
+  if (sizeGb < 1) return `about ${Math.max(10, Math.round((sizeGb * 1000) / 10) * 10)} MB`;
+  return `about ${Number.isInteger(sizeGb) ? sizeGb : sizeGb.toFixed(1)} GB`;
+}
+
+/** "C:\\" -> "C:" */
+export function driveName(drive: string): string {
+  return drive.replace(/[\\/]+$/, "") || drive || "C:";
+}

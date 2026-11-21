@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import platform
 import shutil
 import socket
@@ -21,17 +22,23 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, programs
 from .cache import ResultCache, cache_key
 from .cleanup import cleanup_old
-from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path, which
+from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path
 from .gpu import query_gpus
-from .jobs import Job, JobQueue
+from .jobs import TERMINAL, Job, JobQueue
 from .memory import memory_info
 from .pairing import PairingStore
 from .syncthing import Syncthing, SyncthingError, folder_id
 
-TOOLS = ("ffmpeg", "ffprobe", "python", "claude", "blender", "docker", "node", "npm", "pnpm", "ollama")
+TOOLS = ("ffmpeg", "ffprobe", "python", "claude", "blender", "docker", "node", "npm", "pnpm", "ollama", "git")
+TORCH_CHECK_S = 60.0  # how long /status reuses its "is PyTorch installed?" answer
+
+
+class InstallRequest(BaseModel):
+    program: str
+    stream: bool = True
 
 
 class RunRequest(BaseModel):
@@ -114,7 +121,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     warm = WarmModels()
     pending_cache: dict[str, str] = {}
 
+    torch_seen: dict[str, float | bool] = {}
+
     def on_finish(job: Job, changed: list[Path]) -> None:
+        if job.kind == "install":
+            torch_seen.clear()  # /status checks PyTorch again
         key = pending_cache.pop(job.id, None)
         if key:
             cache.put(key, changed, job.exit_code or 0)
@@ -182,8 +193,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     peer_memory: dict[str, Any] = {}
 
     def tools_present() -> dict[str, bool]:
-        found = {t: bool(which(t)) for t in TOOLS}
+        # Same lookups as /programs, so Blender (not on PATH) counts once it's installed.
+        found = {t: bool(programs.locate(t)) for t in TOOLS}
         found["claude"] = bool(resolve_claude(settings.claude_cmd))
+        if time.monotonic() - float(torch_seen.get("at", -math.inf)) > TORCH_CHECK_S:
+            torch_seen["ok"] = programs.is_installed(programs.CATALOG["pytorch"])
+            torch_seen["at"] = time.monotonic()
+        found["pytorch"] = bool(torch_seen["ok"])
         return found
 
     @app.get("/status", dependencies=[Depends(auth)])
@@ -291,6 +307,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 job.emit({"type": "exit", "code": 0, "state": "done", "duration": 0, "outputs": restored})
                 return await _finish(job, req.stream)
             pending_cache[job.id] = key
+        await queue.submit(job)
+        return await _finish(job, req.stream)
+
+    # ---- programs on the PC ----------------------------------------------------
+    @app.get("/programs", dependencies=[Depends(auth)])
+    async def programs_list():
+        def work():
+            items = [
+                {
+                    "key": prog.key,
+                    "name": prog.name,
+                    "why": prog.why,
+                    "size_gb": prog.size_gb,
+                    "installed": programs.is_installed(prog),
+                }
+                for prog in programs.CATALOG.values()
+            ]
+            return {
+                "programs": items,
+                "free_gb": round(programs.free_gb(), 1),
+                "drive": str(programs.system_drive()),
+            }
+
+        return await asyncio.to_thread(work)
+
+    @app.post("/programs/install", dependencies=[Depends(auth)])
+    async def programs_install(req: InstallRequest):
+        prog = programs.lookup(req.program)
+        if not prog:
+            known = ", ".join(programs.CATALOG)
+            raise HTTPException(
+                404, f"PC Bridge can't install “{req.program}”. Programs it can install: {known}."
+            )
+        name = f"install {prog.name}"
+        free = await asyncio.to_thread(programs.free_gb)
+        needed = prog.size_gb + 2  # the download plus room to unpack it
+        if 0 <= free < needed:
+            drive = str(programs.system_drive()).rstrip("\\/")
+            raise HTTPException(
+                507, f"Not enough free space on the PC's {drive} drive for {prog.name}: "
+                f"{free:.1f} GB free, about {math.ceil(needed)} GB needed. "
+                "Free up some space on the PC, then try again."
+            )  # fmt: skip
+        try:
+            argv = programs.install_argv(prog)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        # Clicked twice, or asked by both Claude and the PC app: follow the install already going.
+        # No await between this check and queue.create, so two requests can't both pass it.
+        for other in queue.jobs.values():
+            if other.kind == "install" and other.name == name and other.state not in TERMINAL:
+                return await _finish(other, req.stream)
+        job = queue.create("install", name, argv, root / "worker", gpu=False)
         await queue.submit(job)
         return await _finish(job, req.stream)
 

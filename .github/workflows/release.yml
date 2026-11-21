@@ -54,6 +54,35 @@ jobs:
           fi
           npm ci
           npx tauri build --bundles ${{ matrix.bundles }}
+      # tauri.conf.json → bundle.macOS.signingIdentity "-" makes Tauri sign the app "ad-hoc" (no paid
+      # certificate) before it packs the .dmg and the update file. Without a full signature macOS says
+      # "PC Bridge is damaged and can't be opened" instead of offering "Open Anyway".
+      - name: Check the Mac app is properly signed
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=target/release/bundle
+          check() {
+            echo "--- $1"
+            codesign --verify --deep --strict --verbose=2 "$1"
+            info=$(codesign --display --verbose=4 "$1" 2>&1)
+            echo "$info"
+            if echo "$info" | grep -q "linker-signed"; then
+              echo "::error::$1 only has the compiler's temporary signature; macOS would call it damaged."
+              exit 1
+            fi
+          }
+          check "$B/macos/PC Bridge.app"
+          # The automatic-update file must contain the same signed app…
+          upd=$(mktemp -d)
+          tar -xzf "$(ls $B/macos/*.app.tar.gz | head -n1)" -C "$upd"
+          check "$upd/PC Bridge.app"
+          # …and so must the disk image people download.
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$(ls $B/dmg/*.dmg | head -n1)"
+          check "$mnt/PC Bridge.app"
+          hdiutil detach "$mnt" || hdiutil detach -force "$mnt" || true
       - name: Collect files
         shell: bash
         run: |

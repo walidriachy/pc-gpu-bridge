@@ -31,7 +31,32 @@ export interface WinState {
   mac_address: string;
   want_ollama: boolean;
   want_comfy: boolean;
+  want_pytorch: boolean;
   use_wsl: boolean;
+}
+
+/** A program the PC Bridge helper can install on the PC. */
+export interface PcProgram {
+  key: string;
+  name: string;
+  why: string;
+  size_gb: number;
+  installed: boolean;
+}
+
+export interface ProgramsInfo {
+  programs: PcProgram[];
+  /** Free space on the drive programs install to, in GB (-1 when unknown). */
+  free_gb: number;
+  drive: string;
+}
+
+export interface InstallResult {
+  ok: boolean;
+  /** Installed, but Windows must restart to finish the install. */
+  restart_needed?: boolean;
+  exit_code: number;
+  log_tail: string;
 }
 
 export interface Check {
@@ -81,6 +106,8 @@ export const api = {
   winClaudeCheck: () => invoke<any>("win_claude_check"),
   winSetupAgent: () => invoke<any>("win_setup_agent"),
   winPairingCode: (fresh: boolean) => invoke<{ code: string; pc_name: string; pc_ip: string }>("win_pairing_code", { fresh }),
+  winPrograms: () => invoke<ProgramsInfo>("win_programs"),
+  winInstallProgram: (key: string) => invoke<InstallResult>("win_install_program", { key }),
   winConfigureWol: () => invoke<{ adapter: string; mac: string }>("win_configure_wol"),
   winPower: () => invoke<any>("win_power"),
   winSetAutostart: (enabled: boolean) => invoke<void>("win_set_autostart", { enabled }),

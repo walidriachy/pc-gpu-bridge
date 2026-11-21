@@ -25,6 +25,7 @@ Send to the PC (use the `pc-bridge` MCP tools, or just run the command — shims
 Keep on the Mac: light edits, git, quick scripts, reading files.
 Files must be inside a folder shared with the PC; outputs appear back in the same Mac folder.
 If unsure, ask `pc_route_advice`.
+If a job fails because a program is missing on the PC, offer to install it with `pc_install` (ask the user first).
 "#;
 
 fn backup(path: &Path) {
@@ -76,6 +77,36 @@ pub fn uninstall_mcp(config_path: &Path) -> Result<(), String> {
 
 pub fn mcp_installed(config_path: &Path) -> bool {
     read_json(config_path).ok().map(|v| v["mcpServers"]["pc-bridge"].is_object()).unwrap_or(false)
+}
+
+/// The program Claude starts for PC Bridge (`mcpServers["pc-bridge"].command`), if connected.
+pub fn mcp_command(config_path: &Path) -> Option<String> {
+    read_json(config_path).ok()?["mcpServers"]["pc-bridge"]["command"].as_str().map(String::from)
+}
+
+/// A path inside the hidden, temporary copy of the app that macOS sometimes runs (App
+/// Translocation). It disappears at the next restart.
+pub fn is_translocated(path: &str) -> bool {
+    path.contains("/AppTranslocation/")
+}
+
+/// Point Claude's PC Bridge connections and the helper commands in `bin_dir` at `binary` again
+/// when they still point at macOS's hidden temporary copy (written by 0.1.2 when it ran from
+/// there). Returns what was fixed.
+pub fn repair_translocated(home: &Path, bin_dir: &Path, binary: &str, tools: &[&str]) -> Result<Vec<String>, String> {
+    let mut fixed = vec![];
+    for (config, who) in [(claude_code_config(home), "Claude Code"), (claude_desktop_config(home), "Claude Desktop")] {
+        if mcp_command(&config).is_some_and(|c| c != binary && is_translocated(&c)) {
+            install_mcp(&config, binary)?;
+            fixed.push(format!("{who} connection"));
+        }
+    }
+    let launcher = std::fs::read_to_string(bin_dir.join("pc-bridge")).unwrap_or_default();
+    if is_translocated(&launcher) && !launcher.contains(&format!("\"{binary}\"")) {
+        install_shims(bin_dir, binary, tools)?;
+        fixed.push("helper commands".into());
+    }
+    Ok(fixed)
 }
 
 /// Replace (or append) the text between `begin` and `end` markers.
@@ -221,6 +252,32 @@ mod tests {
     }
 
     #[test]
+    fn paths_into_the_hidden_temporary_copy_are_repaired() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".pcbridge/bin");
+        let old = "/private/var/folders/xy/T/AppTranslocation/0F1E/d/PC Bridge.app/Contents/MacOS/pc-bridge";
+        let new = "/Applications/PC Bridge.app/Contents/MacOS/pc-bridge";
+        install_mcp(&claude_code_config(home.path()), old).unwrap();
+        install_mcp(&claude_desktop_config(home.path()), "/Users/sam/Applications/PC Bridge.app/x").unwrap();
+        install_shims(&bin, old, &["ffmpeg"]).unwrap();
+        let fixed = repair_translocated(home.path(), &bin, new, &["ffmpeg"]).unwrap();
+        assert_eq!(fixed, vec!["Claude Code connection".to_string(), "helper commands".into()]);
+        assert_eq!(mcp_command(&claude_code_config(home.path())).as_deref(), Some(new));
+        // A deliberate other copy is left alone.
+        assert_eq!(
+            mcp_command(&claude_desktop_config(home.path())).as_deref(),
+            Some("/Users/sam/Applications/PC Bridge.app/x")
+        );
+        let shim = std::fs::read_to_string(bin.join("ffmpeg")).unwrap();
+        assert!(shim.contains(new) && !is_translocated(&shim), "{shim}");
+        // Nothing left to fix, and nothing is created when Claude was never connected.
+        assert!(repair_translocated(home.path(), &bin, new, &["ffmpeg"]).unwrap().is_empty());
+        let empty = tempfile::tempdir().unwrap();
+        assert!(repair_translocated(empty.path(), &empty.path().join("bin"), new, &["ffmpeg"]).unwrap().is_empty());
+        assert!(!claude_code_config(empty.path()).exists() && !empty.path().join("bin").exists());
+    }
+
+    #[test]
     fn claude_md_block_roundtrip() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".claude/CLAUDE.md");
@@ -231,6 +288,7 @@ mod tests {
         let s = std::fs::read_to_string(&p).unwrap();
         assert_eq!(s.matches(BEGIN).count(), 1);
         assert!(s.starts_with("# My rules") && s.contains("pc_delegate_task"));
+        assert!(s.contains("offer to install it with `pc_install` (ask the user first)"), "{s}");
         uninstall_claude_md(&p).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "# My rules\nBe nice.\n");
     }

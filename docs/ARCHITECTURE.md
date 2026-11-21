@@ -55,6 +55,17 @@ flowchart LR
 
 On Windows the same binary is the tray app. It also creates a Python virtual environment in `PCBridge\config\venv` and starts the agent from it.
 
+On the Mac, release builds check where they're running from as the very first step (`mac::heal_install_location`):
+
+| Running from | What the app does |
+|---|---|
+| `/Applications/PC Bridge.app`, still marked "downloaded from the internet" | Removes that mark (`xattr -dr com.apple.quarantine`) from this one bundle and carries on |
+| A hidden read-only copy (`…/AppTranslocation/…`) that macOS made, and `/Applications/PC Bridge.app` exists | Removes the mark from `/Applications/PC Bridge.app`, checks it's gone, starts that copy and quits (so the next start isn't translocated and updates can replace the app) |
+| A hidden copy with nothing in Applications, or Downloads, the opened `.dmg`… | Shows "PC Bridge needs to be in your Applications folder" with an **Open Applications folder** button |
+| Any other copy in `/Applications` or `~/Applications` | Nothing |
+
+Release builds are signed ad-hoc (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), before the `.dmg` and the update `.app.tar.gz` are made. The release workflow runs `codesign --verify --deep --strict` on the built app, the app inside the update file and the app inside the `.dmg`, and fails if any of them only has the compiler's temporary "linker-signed" signature (the cause of 0.1.2's "damaged" message).
+
 ## Life of a job
 
 ```mermaid
@@ -81,6 +92,47 @@ sequenceDiagram
     E-->>C: output + exit code (+ notification if it was a fallback)
   end
 ```
+
+### When a program is missing on the PC
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as You
+  participant C as Claude (Mac)
+  participant E as Engine (Mac)
+  participant A as Agent (PC)
+  C->>E: pc_run blender -b scene.blend …
+  E->>A: POST /run
+  A-->>E: stderr "Blender isn't installed on the PC…"<br/>"missing" event (program = blender) · exit 127
+  E-->>C: result + "ask the user, then pc_install"
+  Note over E: never re-run on the Mac
+  C->>U: Install Blender on the PC?
+  U->>C: yes
+  C->>E: pc_install, program = blender
+  E->>A: POST /programs/install (program, stream = true)
+  A->>A: catalog lookup · free-space check<br/>queue job kind "install": winget or pip
+  A-->>E: NDJSON stream … exit 0
+  E-->>C: "blender is now installed on the PC"
+```
+
+The agent marks a job as "missing a program" when the program can't be started (exit code 127), when stderr shows `No module named '<x>'` for a catalog module (`torch`, `torchvision`, `torchaudio`), or when a shell says a catalog command "is not recognized" / "not found". It adds a plain hint on stderr, a `missing` event, and `"missing": "<key>"` in the job summary. The Mac's `ShimResult` and `JobOutcome` carry it as `missing`.
+
+| Endpoint | What it does | Errors |
+|---|---|---|
+| `GET /programs` | The catalog with `installed` for each program, plus `free_gb` and `drive` (the Windows drive) | – |
+| `POST /programs/install` `{program, stream}` | Looks the name up in the catalog (aliases like `torch`, `npm`, `Node.js` work), checks free space, then runs the catalog's own winget or pip command as a job of kind `install` in `PCBridge\worker`, in its own lane (one install at a time, never holding a GPU slot; no output scan). Streams NDJSON like `/run`. A second request for the same program follows the running install. winget's "already installed" codes count as success; "restart to finish" counts as success with a `restart_needed` event. winget installs are stopped after 20 min without progress, any install after 3 h | 404 not in the catalog · 507 not enough space (needs size + 2 GB) · 503 winget or Python missing |
+
+Both need the token. The catalog lives in `agent/pcbridge_agent/programs.py`. Nothing else can be installed through these endpoints.
+
+### How a job's outputs are found
+
+Before and after each job, the agent takes a snapshot (file → modified time) in a worker thread, then lists files that are new or changed since the job started. The snapshot covers:
+
+* the job's working folder, down to 2 levels of sub-folders (all of it for `/delegate` jobs);
+* folders named by the job's arguments, absolute or relative to the working folder, including `key=value` forms, but only inside the PC root and at most 32 of them. A folder argument is scanned 2 levels deep; for a file argument only its parent folder's own files count. Flags and URLs are ignored. Blender's `//renders/f_####` is relative to the job's first `.blend` file (or the working folder without one): that file's folder is scanned 2 levels deep, plus the named folder if it already exists.
+
+Nearest folders go first. A snapshot skips `node_modules`, `.git`, `.venv`… and Syncthing temp files, and stops after 200,000 files or 5 seconds. Files written outside these places aren't job outputs (not copied, not cached), but if they're in a shared folder Syncthing still brings them to the Mac.
 
 ## Routing decision
 
@@ -156,7 +208,8 @@ flowchart LR
 | Path | Language | Responsibility |
 |---|---|---|
 | `agent/pcbridge_agent/app.py` | Python | HTTP API, streaming, Syncthing/Ollama/ComfyUI endpoints |
-| `agent/pcbridge_agent/jobs.py` | Python | FIFO queue, process runner, output detection, keep-awake |
+| `agent/pcbridge_agent/jobs.py` | Python | FIFO queue, process runner, output detection, missing-program detection, keep-awake |
+| `agent/pcbridge_agent/programs.py` | Python | Catalog of installable programs, install commands (winget/pip), missing-program hints, PC Python and Blender lookup |
 | `agent/pcbridge_agent/{pairing,cache,cleanup,gpu,memory,config}.py` | Python | One concern each |
 | `crates/bridge-core/src/router.rs` | Rust | Routing decision + SQLite history |
 | `crates/bridge-core/src/detect.rs` | Rust | Job classification, RAM estimates, NVENC rewrite, `.pcbridge` opt-ins |
@@ -164,5 +217,6 @@ flowchart LR
 | `crates/bridge-core/src/mcp.rs` | Rust | MCP protocol + tool definitions |
 | `crates/bridge-core/src/paths.rs` | Rust | Mac ⇄ PC path mapping |
 | `crates/bridge-core/src/claude_config.rs` | Rust | Idempotent edits to Claude configs, CLAUDE.md, shims, PATH |
-| `app/src-tauri/src/{mac,win,tray}.rs` | Rust | Tauri commands for each OS, tray icon |
+| `app/src-tauri/src/{mac,win,tray}.rs` | Rust | Tauri commands for each OS, tray icon. `mac.rs` also keeps the app in Applications; `win.rs` has `win_programs` / `win_install_program` for the Programs card |
 | `app/src/` | TypeScript/React | Wizards and the four main screens |
+| `app/src/components/Programs.tsx` | TypeScript/React | Windows Settings → Programs card and the wizard's PyTorch option |

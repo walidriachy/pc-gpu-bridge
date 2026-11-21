@@ -50,8 +50,9 @@ Both have step-by-step setup wizards, so **you don't need Terminal.**
 | 🧠 **Smart router** | Compares the estimated Mac time against the PC time, counting file transfer, queue and wake-up. It learns from every job (SQLite history) |
 | 🧮 **Memory-aware** | Watches Mac memory pressure. RAM-heavy jobs, and any heavy job while the Mac is short on memory, go to the PC's memory. Both apps show Mac and PC free RAM side by side |
 | 🎬 **NVENC for free** | `libx264`/`libx265` are switched to `h264_nvenc`/`hevc_nvenc` when that's safe |
-| 🤖 **14 Claude tools (MCP)** | `pc_run`, `pc_run_task`, `pc_delegate_task`, `pc_docker`, `pc_node_build`, `pc_status`, `pc_gpu`, `pc_memory`, `pc_route_advice`, `pc_push_file`, `pc_pull_file`, `pc_wake`, `comfy_generate`, `ollama_chat` |
+| 🤖 **15 Claude tools (MCP)** | `pc_run`, `pc_run_task`, `pc_delegate_task`, `pc_docker`, `pc_node_build`, `pc_status`, `pc_install`, `pc_gpu`, `pc_memory`, `pc_route_advice`, `pc_push_file`, `pc_pull_file`, `pc_wake`, `comfy_generate`, `ollama_chat` |
 | 🪄 **Transparent shims** | `ffmpeg`, `python`, `blender`… in `~/.pcbridge/bin` redirect on their own. `npm`/`pnpm`/`docker` only in projects that opt in |
+| 🧰 **Missing programs, one click away** | If a job needs a program the PC doesn't have (Blender, PyTorch, Node.js…), the result says so and Claude can offer to install it with `pc_install`, after asking you. On the PC, **Settings → Programs** has an **Install** button for each one. Only a fixed list of programs can be installed, in their normal Windows place |
 | 👷 **Worker Claude** | Hands whole multi-step tasks to a Claude running next to the GPU |
 | 📁 **Automatic file sync** | A private Syncthing setup that the app configures for you. Inputs a command names are pushed directly if they haven't synced yet |
 | ⚡ **Result cache & warm models** | The same command on the same inputs reuses the earlier result, and Ollama models stay loaded |
@@ -100,7 +101,7 @@ More diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the life of a
    *GitHub may save these as `PC.Bridge.Setup.exe` and `PC.Bridge.dmg`; they're the same files.*
 
 2. **PC:** run the installer. If you see *"Windows protected your PC"*, click **More info → Run anyway**. Then follow the 9-step wizard. It ends by showing a **6-digit code**.
-3. **Mac:** drag the app to Applications, then **right-click → Open** the first time. Follow the 8-step wizard and type the code.
+3. **Mac:** drag the app to Applications and open it from there. The first time, macOS says it can't check the app: click **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Follow the 8-step wizard and type the code.
 4. Restart Claude Desktop. **Done:** just ask Claude to do heavy things.
 
 Full walkthrough, with what every step does and how to fix any ❌: **[docs/GUIDE.md](docs/GUIDE.md)**
@@ -134,7 +135,7 @@ These are the choices this build makes. Each one is something you can change lat
 5. **Files move with Syncthing**, which the app configures for the folders you choose. A file named in a command is also pushed directly if it hasn't synced yet.
 6. **One job at a time** on the PC by default, first come, first served. That avoids running out of VRAM.
 7. **The worker Claude** uses your own Claude login on the PC, and its edits are limited to `PCBridge\worker`. This step is optional.
-8. **The apps aren't code-signed** (signing costs a yearly fee), so macOS and Windows warn the first time. The guide shows the one-time click.
+8. **The apps aren't signed with a paid certificate** (that costs a yearly fee), so macOS and Windows warn the first time. The Mac app has a free "ad-hoc" signature, so macOS offers **Open Anyway** instead of calling it damaged. The guide shows the one-time click.
 9. **No admin rights day to day.** Windows asks for admin once, during setup, for Wake-on-LAN and power settings. The agent is a normal process that starts with Windows, not a service.
 10. **Node and Docker offload is opt-in per project** with a `.pcbridge` file, because their dependencies must also be installed on the PC.
 11. **Housekeeping:** job folders are deleted after 14 days and the result cache is capped at 20 GB.
@@ -189,13 +190,14 @@ bash scripts/e2e-real-agent.sh                 # real Python agent ⇄ Rust engi
 
 ## Project status & roadmap
 
-**v0.1.0: first public release.** Every feature above is implemented and tested in CI (about 80 automated tests across Python, Rust and TypeScript). The Windows code paths have been built and unit-tested in CI but not yet used on many real PCs. Please [open an issue](https://github.com/walidriachy/pc-gpu-bridge/issues/new/choose) if something doesn't work.
+**v0.1.x.** Every feature above is implemented and tested in CI (more than 150 automated tests across Python, Rust and TypeScript). What's new since the last release is listed under *Unreleased* in the [changelog](CHANGELOG.md). The Windows code paths have been built and unit-tested in CI but not yet used on many real PCs. Please [open an issue](https://github.com/walidriachy/pc-gpu-bridge/issues/new/choose) if something doesn't work.
 
 ```mermaid
 timeline
   title PC Bridge roadmap
-  v0.1 — now : Both apps + wizards : Smart, memory-aware router : 14 MCP tools : CI + installers
-  v0.2 : Live job progress in the menu bar : Auto-update : Signed and notarised builds
+  v0.1 : Both apps + wizards : Smart, memory-aware router : CI + installers : Signed auto-updates (0.1.2)
+  v0.1.3 : One-click install of missing programs (15 MCP tools) : Faster jobs on big shared folders : PyTorch in the wizard : Mac "damaged" fix
+  v0.2 : Live job progress in the menu bar : Signed and notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake via Tailscale relay when away from home
 ```
 
@@ -206,6 +208,7 @@ Details, decisions and known limitations: **[ROADMAP.md](ROADMAP.md)**.
 * **Network:** Tailscale only. The agent never binds to your LAN or a public address.
 * **Pairing:** a 6-digit code that works once, expires after 15 minutes and allows 5 tries. It's exchanged for a 256-bit token stored in the Mac's Keychain. The PC stores only a SHA-256 hash of it.
 * **Requests:** every request is authenticated. Every path is confined to the PC root, and an optional program allowlist is available.
+* **Installs:** the PC only installs programs from a fixed list (FFmpeg, Blender, PyTorch, Ollama, Node.js, Docker Desktop, Git), with Windows' own installer (winget) or pip. `pc_install` and the **Install** buttons send only the program's name; the PC builds the install command itself.
 
 See [SECURITY.md](SECURITY.md) for the full model and how to report a vulnerability privately.
 

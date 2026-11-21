@@ -15,11 +15,27 @@ use std::time::Duration;
 #[derive(Default)]
 struct Seen {
     run_bodies: Vec<Value>,
+    install_bodies: Vec<Value>,
     pushed: Vec<usize>,
     auth_ok: bool,
 }
 
+/// How the mock answers POST /run.
+#[derive(Clone, Copy, PartialEq)]
+enum RunMode {
+    /// The job runs and makes out.mp4.
+    Ok,
+    /// The PC accepts the job but the program isn't installed there (exit 127 + "missing" event).
+    Missing,
+    /// The PC refuses before accepting the job (HTTP 500, no events).
+    Refuse,
+}
+
 fn start_mock() -> (String, Arc<Mutex<Seen>>) {
+    start_mock_with(RunMode::Ok)
+}
+
+fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Seen::default()));
@@ -52,16 +68,82 @@ fn start_mock() -> (String, Arc<Mutex<Seen>>) {
                 let mut body = vec![0u8; len];
                 reader.read_exact(&mut body).unwrap();
                 let path = target.split('?').next().unwrap();
+                let ndjson = |evs: &[Value]| evs.iter().map(|e| e.to_string() + "\n").collect::<String>().into_bytes();
+                let mut status_line = "200 OK";
                 let (ctype, resp): (&str, Vec<u8>) = match (method.as_str(), path) {
                     ("GET", "/status") => (
                         "application/json",
                         json!({
                             "ok": true, "queue_depth": 0,
-                            "memory": {"total_bytes": 34359738368u64, "available_bytes": 30000000000u64}
+                            "memory": {"total_bytes": 34359738368u64, "available_bytes": 30000000000u64},
+                            "tools": {"ffmpeg": true, "ffprobe": true, "blender": false, "node": true, "claude": true}
                         })
                         .to_string()
                         .into_bytes(),
                     ),
+                    ("GET", "/programs") => (
+                        "application/json",
+                        json!({
+                            "programs": [
+                                {"key": "ffmpeg", "name": "FFmpeg", "why": "video", "size_gb": 0.3, "installed": true},
+                                {"key": "blender", "name": "Blender", "why": "3D", "size_gb": 1.0, "installed": false}
+                            ],
+                            "free_gb": 120.5, "drive": "C:\\"
+                        })
+                        .to_string()
+                        .into_bytes(),
+                    ),
+                    ("POST", "/programs/install") => {
+                        let b: Value = serde_json::from_slice(&body).unwrap();
+                        seen.lock().unwrap().install_bodies.push(b.clone());
+                        match b["program"].as_str().unwrap_or("") {
+                            "ffmpeg" => (
+                                "application/x-ndjson",
+                                ndjson(&[
+                                    json!({"type": "job", "id": "inst1", "folder": r"D:\PCBridge\jobs\i"}),
+                                    json!({"type": "started"}),
+                                    json!({"type": "stdout", "data": "Found FFmpeg [Gyan.FFmpeg]\n"}),
+                                    json!({"type": "stdout", "data": "Successfully installed\n"}),
+                                    json!({"type": "exit", "code": 0, "state": "done", "duration": 12.0, "outputs": []}),
+                                ]),
+                            ),
+                            "git" => (
+                                "application/x-ndjson",
+                                ndjson(&[
+                                    json!({"type": "job", "id": "inst2", "folder": r"D:\PCBridge\jobs\g"}),
+                                    json!({"type": "stderr", "data": "Installer failed: the user said no\n"}),
+                                    json!({"type": "exit", "code": 1, "state": "failed", "duration": 3.0, "outputs": []}),
+                                ]),
+                            ),
+                            "docker" => (
+                                "application/x-ndjson",
+                                ndjson(&[
+                                    json!({"type": "job", "id": "inst3", "folder": r"D:\PCBridge\jobs\d"}),
+                                    json!({"type": "stdout", "data": "PC Bridge: installed. Restart the PC to finish the install.\n"}),
+                                    json!({"type": "restart_needed"}),
+                                    json!({"type": "exit", "code": 0, "state": "done", "duration": 300.0, "outputs": []}),
+                                ]),
+                            ),
+                            "blender" => {
+                                status_line = "507 Insufficient Storage";
+                                (
+                                    "application/json",
+                                    json!({"detail": "Not enough space on the PC's C:\\ drive for Blender: 1.0 GB free, about 3 GB needed"})
+                                        .to_string()
+                                        .into_bytes(),
+                                )
+                            }
+                            other => {
+                                status_line = "404 Not Found";
+                                (
+                                    "application/json",
+                                    json!({"detail": format!("PC Bridge doesn't know how to install '{other}'")})
+                                        .to_string()
+                                        .into_bytes(),
+                                )
+                            }
+                        }
+                    }
                     ("GET", "/files/stat") => {
                         let body = if target.contains("out.mp4") {
                             json!({"exists": true, "size": 3})
@@ -75,6 +157,25 @@ fn start_mock() -> (String, Arc<Mutex<Seen>>) {
                         (
                             "application/json",
                             json!({"ok": true, "path": "workspace/w/in.mov", "bytes": 10}).to_string().into_bytes(),
+                        )
+                    }
+                    ("POST", "/run") if mode == RunMode::Refuse => {
+                        seen.lock().unwrap().run_bodies.push(serde_json::from_slice(&body).unwrap());
+                        status_line = "500 Internal Server Error";
+                        ("application/json", b"{\"detail\":\"agent is restarting\"}".to_vec())
+                    }
+                    ("POST", "/run") if mode == RunMode::Missing => {
+                        seen.lock().unwrap().run_bodies.push(serde_json::from_slice(&body).unwrap());
+                        (
+                            "application/x-ndjson",
+                            ndjson(&[
+                                json!({"type": "job", "id": "miss1", "folder": r"D:\PCBridge\jobs\m"}),
+                                json!({"type": "started"}),
+                                json!({"type": "stderr", "data": "PC Bridge: program not found on the PC: ffmpeg\n"}),
+                                json!({"type": "stderr", "data": "PC Bridge: FFmpeg isn't installed on the PC. Ask Claude to install it (tool pc_install, program \"ffmpeg\"), or on the PC open PC Bridge → Settings → Programs → Install.\n"}),
+                                json!({"type": "missing", "program": "ffmpeg", "name": "FFmpeg"}),
+                                json!({"type": "exit", "code": 127, "state": "failed", "duration": 0.1, "outputs": []}),
+                            ]),
                         )
                     }
                     ("POST", "/run") => {
@@ -95,7 +196,7 @@ fn start_mock() -> (String, Arc<Mutex<Seen>>) {
                     _ => ("application/json", b"{\"detail\":\"nope\"}".to_vec()),
                 };
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status_line}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     resp.len()
                 );
                 stream.write_all(head.as_bytes()).unwrap();
@@ -185,6 +286,128 @@ fn unreachable_pc_falls_back_locally() {
     let r = engine.run("ffmpeg", &args, dir.path(), None, &mut io);
     assert_eq!((r.target, r.exit_code), (Target::Mac, 7));
     assert_eq!(io.notes.len(), 1);
+}
+
+fn engine_for(url: &str, dir: &std::path::Path, local: bridge_core::shim::LocalRunner) -> Engine {
+    let mut cfg = BridgeConfig::default();
+    cfg.shared_folders = vec![SharedFolder { mac_path: dir.display().to_string(), name: "w".into() }];
+    cfg.sync_wait_secs = 0;
+    cfg.notify_on_fallback = false;
+    Engine {
+        cfg,
+        client: Some(AgentClient::new(url, Some("secret".into()))),
+        history: None,
+        mac_mem: Some(MemoryInfo {
+            total_bytes: 16 << 30,
+            available_bytes: 8 << 30,
+            used_percent: 50.0,
+            pressure: Pressure::Normal,
+        }),
+        local,
+        wake_timeout: Duration::ZERO,
+    }
+}
+
+fn args(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn missing_program_on_pc_never_runs_on_the_mac() {
+    let (url, seen) = start_mock_with(RunMode::Missing);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| panic!("must not fall back to the Mac"));
+    // Forced to the PC (pc_run) and left to the router (shim): both report the PC's answer.
+    for force in [Some(Target::Pc), None] {
+        let mut io = Capture::default();
+        let r =
+            engine.run("ffmpeg", &args(&["-i", "in.mov", "-c:v", "libx264", "out.mp4"]), dir.path(), force, &mut io);
+        assert_eq!((r.target, r.exit_code), (Target::Pc, 127), "reason: {}", r.reason);
+        assert_eq!(r.missing.as_deref(), Some("ffmpeg"));
+        assert_eq!(r.job_id.as_deref(), Some("miss1"));
+        assert!(io.stderr.contains("pc_install"), "{}", io.stderr);
+        assert!(io.notes.is_empty(), "{:?}", io.notes);
+    }
+    assert_eq!(seen.lock().unwrap().run_bodies.len(), 2);
+
+    // Through MCP, Claude is told to ask the user and use pc_install.
+    let r = bridge_core::mcp::call_tool(
+        &engine,
+        "pc_run",
+        &json!({"command": "ffmpeg -i in.mov -c:v libx264 out.mp4", "cwd": dir.path().display().to_string()}),
+    );
+    assert_eq!(r["isError"], true);
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("Ran on the PC") && t.contains("pc_install (program \"ffmpeg\")"), "{t}");
+}
+
+#[test]
+fn refused_before_acceptance_still_falls_back_unless_forced() {
+    let (url, _seen) = start_mock_with(RunMode::Refuse);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| 7);
+    let a = args(&["-i", "in.mov", "-c:v", "libx264", "out.mp4"]);
+    let mut io = Capture::default();
+    let r = engine.run("ffmpeg", &a, dir.path(), None, &mut io);
+    assert_eq!((r.target, r.exit_code), (Target::Mac, 7), "reason: {}", r.reason);
+    assert!(r.missing.is_none());
+    let r = engine.run("ffmpeg", &a, dir.path(), Some(Target::Pc), &mut io);
+    assert_eq!((r.target, r.exit_code), (Target::Pc, 3), "reason: {}", r.reason);
+}
+
+#[test]
+fn install_programs_through_client_and_mcp() {
+    let (url, seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| panic!("no local runs"));
+    let client = engine.client.clone().unwrap();
+
+    let p = client.programs().unwrap();
+    assert_eq!(p["programs"][0]["key"], "ffmpeg");
+    assert_eq!(p["programs"][1]["installed"], false);
+
+    let mut events = 0;
+    let o = client.install_program("ffmpeg", |_| events += 1).unwrap();
+    assert_eq!((o.exit_code, o.job_id.as_deref()), (0, Some("inst1")));
+    assert_eq!(events, 5);
+    assert!(!o.restart_needed);
+
+    // Installed, but Windows must restart to finish: Claude is told to ask for a restart.
+    assert!(client.install_program("docker", |_| {}).unwrap().restart_needed);
+    let r = bridge_core::mcp::call_tool(&engine, "pc_install", &json!({"program": "docker"}));
+    assert_eq!(r["isError"], false, "{r}");
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("must restart") && t.contains("restart the PC"), "{t}");
+
+    let r = bridge_core::mcp::call_tool(&engine, "pc_install", &json!({"program": " FFmpeg "}));
+    assert_eq!(r["isError"], false, "{r}");
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("ffmpeg is now installed on the PC") && t.contains("Successfully installed"), "{t}");
+
+    let r = bridge_core::mcp::call_tool(&engine, "pc_install", &json!({"program": "git"}));
+    assert_eq!(r["isError"], true);
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("exit code 1") && t.contains("the user said no") && t.contains("\"Yes\""), "{t}");
+
+    // Low disk space (507): the PC's own sentence reaches Claude.
+    let r = bridge_core::mcp::call_tool(&engine, "pc_install", &json!({"program": "blender"}));
+    assert_eq!(r["isError"], true);
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("Not enough space") && !t.contains("HTTP 507"), "{t}");
+
+    let r = bridge_core::mcp::call_tool(&engine, "pc_install", &json!({"program": "photoshop"}));
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("doesn't know how to install"), "{r}");
+
+    // The MCP tool trims and lowercases the name before sending it.
+    assert_eq!(seen.lock().unwrap().install_bodies[1], json!({"program": "docker", "stream": true}));
+    assert_eq!(seen.lock().unwrap().install_bodies[3], json!({"program": "ffmpeg", "stream": true}));
+
+    // pc_status lists which known programs are installed.
+    let r = bridge_core::mcp::call_tool(&engine, "pc_status", &json!({}));
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("Programs on the PC: installed: ffmpeg, node · not installed: blender"), "{t}");
 }
 
 /// Optional cross-language test against the REAL Python agent. CI starts the agent and sets:

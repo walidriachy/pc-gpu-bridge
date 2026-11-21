@@ -39,17 +39,26 @@ PC Bridge isn't signed with a paid Apple or Microsoft certificate, so both syste
 3. Click **Run anyway**.
 4. The installer finishes by itself. It installs only for your user and doesn't need admin rights. PC Bridge opens when it's done.
 
-### On the Mac ("can't be opened because Apple cannot check it")
+### On the Mac ("Apple could not verify PC Bridge")
 
 1. Double-click **PC Bridge.dmg**, then drag **PC Bridge** onto the **Applications** folder.
-2. Open **Applications**, **right-click** (or Control-click) **PC Bridge**, and choose **Open**.
-3. Click **Open** again in the box that appears.
+2. Open **Applications** and double-click **PC Bridge**. Always open it from **Applications**, not from the window that opened with the download.
+3. macOS says it **can't check** PC Bridge (*"Apple could not verify…"* or *"…can't be opened because Apple cannot check it"*). Click **Done** or **OK**. Don't click **Move to Trash**.
+4. Open **System Settings → Privacy & Security**.
+5. Scroll down. You'll see *"PC Bridge was blocked…"*. Click **Open Anyway**.
+6. Confirm with your password or Touch ID, then click **Open Anyway** once more if asked.
 
-If you double-clicked and only saw a box with no Open button:
+On macOS 14 (Sonoma) and older you can also **right-click** (or Control-click) **PC Bridge** in Applications, choose **Open**, then click **Open** again.
 
-1. Open **System Settings → Privacy & Security**.
-2. Scroll down. You'll see *"PC Bridge was blocked…"*. Click **Open Anyway**.
-3. Confirm with your password or Touch ID.
+You only do this once. Updates install by themselves after that.
+
+#### "PC Bridge is damaged and can't be opened" (version 0.1.2)
+
+The Mac download of version **0.1.2** was missing part of its signature, so macOS calls it "damaged". Nothing is actually broken, and you don't need Terminal to fix it.
+
+* **Best fix:** download the newest **PC Bridge.dmg** (0.1.3 or newer, Part 1). Drag PC Bridge onto **Applications** and choose **Replace** if asked. Then follow the steps above. You'll get the normal "Open Anyway" message instead of "damaged".
+* **If you already opened 0.1.2 anyway** (through **System Settings → Privacy & Security → Open Anyway**), macOS may be running it from a hidden temporary copy, and then it can't update itself. Install 0.1.3 once as described above. From 0.1.3, PC Bridge checks where it's running from when it starts. If macOS started it from a hidden copy, it moves itself back to **Applications** and restarts once, so updates keep working.
+* If PC Bridge says **"PC Bridge needs to be in your Applications folder"**, quit it (menu bar dot → **Quit PC Bridge**), drag it onto **Applications**, and open it from there.
 
 ---
 
@@ -64,7 +73,7 @@ Each step tells you **what** it's doing and **why**. Most steps have a **Do it f
 | **3. Tailscale** | Installs Tailscale, the private link to your Mac | Click **Do it for me** (say **Yes** if Windows asks), then **Open Tailscale to sign in**. Remember which account you used |
 | **4. Tools** | Installs FFmpeg (video), Python, Syncthing (file sync) and the PC Bridge helper | Click **Install everything** and wait a few minutes |
 | **5. Worker Claude** *(optional)* | Installs Claude Code on the PC so your Mac's Claude can hand it whole tasks | Click **Do it for me**, then **Log in** and finish the login in your browser |
-| **6. Optional AI tools** *(optional)* | Ollama (local AI chat models) and ComfyUI (image generation) | Click **Install Ollama** or **Open the ComfyUI download page** if you want them, or skip |
+| **6. Optional AI tools** *(optional)* | Ollama (local AI chat models), PyTorch with GPU support (AI in Python, like Whisper and Stable Diffusion) and ComfyUI (image generation) | Click **Install Ollama**, tick **PyTorch (GPU)** and click **Install PyTorch**, or **Open the ComfyUI download page** if you want them, or skip. PyTorch is big: the step shows the free space on drive C: and won't start if there isn't enough |
 | **7. Wake-on-LAN** *(optional)* | Lets your Mac wake the PC from sleep | Click **Do it for me** and say **Yes** to the Windows admin prompt. If it says the BIOS setting is off, follow the picture, or skip |
 | **8. Power** *(optional)* | The PC can sleep when idle, wakes for jobs, and PC Bridge starts with Windows | Click **Do it for me** |
 | **9. Pair** | Shows a **6-digit code** | Leave this screen open and go to your Mac |
@@ -111,6 +120,17 @@ Some PCs also need a switch turned on in the **BIOS**, the settings screen that 
 * It watches how full your Mac's memory is. When the Mac is under pressure, or a job looks like it needs a lot of memory (big pandas/numpy work, Docker, large builds, local AI models), the job goes to the PC.
 * The **Status** tab shows Mac and PC free memory side by side, in both apps.
 
+### When a program is missing on the PC
+
+Sometimes a job needs a program your PC doesn't have yet, for example Blender for a 3D render or PyTorch for an AI script. The job then stops with a clear message, such as *"Blender isn't installed on the PC"*, instead of a cryptic error. It isn't run on the Mac instead.
+
+* **Claude offers to install it.** Claude asks you first. Say yes and it installs the program on the PC, then you can try again.
+* **Or install it on the PC yourself:** open PC Bridge on the PC → **Settings → Programs**. Each program shows what it's for and its size, with ✅ **Installed** or an **Install** button. **Check again** refreshes the list.
+* PC Bridge can install FFmpeg, Blender, PyTorch (GPU), Ollama, Node.js, Docker Desktop and Git. Nothing else.
+* Programs go in their normal Windows place (like `C:\Program Files`), **not** in the PCBridge folder or your shared folders.
+* If Windows asks *"Do you want to allow this app to make changes?"* on the PC, someone at the PC needs to click **Yes**.
+* PC Bridge checks there's enough free space on drive C: first, and tells you how much is needed if there isn't.
+
 ### Big JavaScript builds and Docker (optional)
 
 These go to the PC only in projects you choose. In a project folder that's inside a shared folder, create a file named `.pcbridge` containing:
@@ -135,11 +155,16 @@ Start with **Help → Run diagnostics**. It checks every part and tells you, in 
 | PC Bridge is red after restarting the PC, and diagnostics say the agent and folder syncing aren't running | Update to **0.1.2 or newer**. With older versions, open PC Bridge on the PC and click **Finish** at the end of the setup wizard |
 | The PC dot keeps flickering red/green, or the speed check says "request or response body error" | Update both apps to **0.1.2 or newer**. Older helpers froze while a job scanned a big shared folder |
 | Something you just installed on the PC still shows as missing | On the PC: **Settings → Restart the helper** |
+| A job says a program **"isn't installed on the PC"** | Let Claude install it when it asks, or on the PC open **Settings → Programs** and click **Install**. Then run the job again. See Part 5 |
+| An install from **Settings → Programs** fails or seems stuck | Look at the PC's screen: Windows may be waiting for you to click **Yes**. Click **Show what the installer said** for details. If it says there isn't enough space, free some up in Windows **Settings → System → Storage** |
+| A result file arrived on the Mac, but the Jobs tab doesn't list it as an output | From 0.1.3, the PC only looks for results in the folder the job ran in (2 levels of sub-folders) and in folders named on the command line, so jobs on big shared folders stay fast. Files saved elsewhere in a shared folder still sync to the Mac. Name the output folder in the command (or ask Claude to) if you want it listed |
 | Pairing code rejected | Codes expire after 15 minutes and allow 5 tries. On the PC, click **Get a new code** |
 | Results don't appear on the Mac | Wait a few seconds; big files take time to sync. Check the file is inside a folder you shared in wizard step 4 |
 | PC doesn't wake up | Wake-on-LAN only works when the Mac is on the **same home network** as the PC. Check the BIOS setting (Part 3) |
 | A job ran on the Mac instead | The PC wasn't reachable, or PC Bridge estimated the Mac would be faster (for example, a huge file over slow Wi-Fi). You'll see a notification. The **Jobs** tab shows where each job ran |
-| "Windows protected your PC" / "Apple cannot check it" | See Part 2 |
+| "Windows protected your PC" / "Apple could not verify" / "Apple cannot check it" | See Part 2 |
+| Mac says **"PC Bridge is damaged and can't be opened"** | It isn't damaged: the 0.1.2 Mac download was missing part of its signature. Download the newest **PC Bridge.dmg**, drag it onto **Applications** (choose **Replace**), open it from Applications and click **Open Anyway** in **System Settings → Privacy & Security**. No Terminal needed. See Part 2 |
+| Mac app doesn't update itself, or says **"PC Bridge needs to be in your Applications folder"** | It's running from the download or from a hidden temporary copy that macOS made. Quit it (menu bar dot → **Quit PC Bridge**), drag it onto **Applications** and open it from there. From 0.1.3 it fixes this by itself when it's already in Applications |
 | Want to undo everything on the Mac | **Settings → Disconnect from Claude**. This removes the Claude tools, the CLAUDE.md note and the PATH entry. A `.pcbridge-backup` copy of each file from before the change is kept next to it |
 | Want to remove it from the PC | Windows **Settings → Apps → PC Bridge → Uninstall**, then delete the `PCBridge` folder if you don't need the job outputs |
 
@@ -148,6 +173,8 @@ Start with **Help → Run diagnostics**. It checks every part and tells you, in 
 From version 0.1.2, PC Bridge **updates itself** on both computers. A couple of minutes after it starts, and then every 6 hours, it looks for a new version, installs it and restarts. The PC waits until a running job is finished. To check right away, go to **Settings → Check for updates now**. Updates are signed, so PC Bridge only installs real releases.
 
 If you have 0.1.0 or 0.1.1, download and install 0.1.2 once on each computer (Part 1). After that you never need to download it again.
+
+On the Mac, if 0.1.2 stays on 0.1.2 (usually after the "damaged" message in Part 2), download and install the newest version once and open it from **Applications**. From 0.1.3, the Mac app keeps itself in Applications so updates can install.
 
 ## What PC Bridge changes on each computer
 
@@ -160,5 +187,6 @@ If you have 0.1.0 or 0.1.1, download and install 0.1.2 once on each computer (Pa
 **PC:**
 * Everything goes in the `PCBridge` folder: `workspace`, `jobs`, `worker`, `cache`, `logs`, `config`
 * Programs installed through Windows' own installer (winget): Tailscale, FFmpeg, Python, Syncthing, and optionally Ollama and Claude Code
+* Any program you (or Claude, after asking you) install from **Settings → Programs**: FFmpeg, Blender, Node.js, Docker Desktop, Git or Ollama through winget, and PyTorch through Python's own installer (pip). They go in their normal Windows place, outside the PCBridge folder
 * An autostart entry for PC Bridge
 * If you allowed step 7: Wake-on-LAN enabled on the network adapter, and Windows "Fast startup" turned off

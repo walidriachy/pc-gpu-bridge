@@ -87,6 +87,9 @@ pub struct ShimResult {
     pub job_id: Option<String>,
     pub seconds: f64,
     pub decision: Option<Decision>,
+    /// A program the PC job needed but the PC doesn't have (catalog key, e.g. "blender").
+    /// The PC already printed a hint on stderr; the job is never re-run on the Mac because of it.
+    pub missing: Option<String>,
 }
 
 fn looks_like_path(s: &str) -> bool {
@@ -253,6 +256,7 @@ impl Engine {
             job_id: None,
             seconds: start.elapsed().as_secs_f64(),
             decision: d,
+            missing: None,
         }
     }
 
@@ -292,6 +296,7 @@ impl Engine {
                         job_id: None,
                         seconds: 0.0,
                         decision: None,
+                        missing: None,
                     };
                 }
                 return self.local_fallback(tool, args, cwd, why, None);
@@ -315,6 +320,7 @@ impl Engine {
                     job_id: None,
                     seconds: 0.0,
                     decision: None,
+                    missing: None,
                 };
             }
             return self.local_fallback(tool, args, cwd, why, None);
@@ -340,6 +346,8 @@ impl Engine {
             return self.local_fallback(tool, args, cwd, decision.reason.clone(), Some(decision));
         }
         match self.run_on_pc(&tool_l, &plan, io) {
+            // The PC accepted the job: whatever happened there (including "program not installed on
+            // the PC", reported in `r.missing`) is the result. It is never run again on the Mac.
             Ok(mut r) => {
                 r.reason = decision.reason.clone();
                 r.decision = Some(decision);
@@ -370,6 +378,7 @@ impl Engine {
                         job_id: None,
                         seconds: 0.0,
                         decision: Some(decision),
+                        missing: None,
                     };
                 }
                 let why = format!("The PC job couldn't run ({e}), so it ran on the Mac instead");
@@ -432,6 +441,7 @@ impl Engine {
                     job_id: None,
                     seconds: start.elapsed().as_secs_f64(),
                     decision: None,
+                    missing: None,
                 });
             }
             Err(e) => return Err(e),
@@ -467,6 +477,7 @@ impl Engine {
             job_id: outcome.job_id,
             seconds: start.elapsed().as_secs_f64(),
             decision: None,
+            missing: outcome.missing,
         })
     }
 }

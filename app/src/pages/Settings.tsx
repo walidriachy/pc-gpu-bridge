@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { api, errText, type BridgeConfig, type Platform, type WinState } from "../lib/api";
 import { Card, CopyBox } from "../components/ui";
+import { ProgramsCard } from "../components/Programs";
 
 function UpdatesCard() {
   const [msg, setMsg] = useState("");
@@ -119,6 +120,7 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
         <p className="muted small">Job folders older than 14 days are deleted automatically (change “cleanup_days” in {ws.root}\config\settings.json).</p>
       </Card>
       <UpdatesCard />
+      <ProgramsCard />
       <Card title="Helper">
         <p>The helper is the background program your Mac talks to. Restart it if something you just installed (like FFmpeg) still shows as missing.</p>
         <button

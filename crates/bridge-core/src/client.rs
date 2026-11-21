@@ -41,6 +41,10 @@ pub struct JobOutcome {
     pub duration: f64,
     pub folder: Option<String>,
     pub result_text: Option<String>,
+    /// Catalog key (e.g. "ffmpeg") of a program the job needed but the PC doesn't have.
+    pub missing: Option<String>,
+    /// An install that worked, but the PC must restart to finish it.
+    pub restart_needed: bool,
 }
 
 #[derive(Clone)]
@@ -86,6 +90,8 @@ impl AgentClient {
         match status.as_u16() {
             401 => Err(ClientError::Unauthorized),
             403 | 404 | 422 => Err(ClientError::Refused(detail)),
+            // "Not enough disk space" / "X isn't running on the PC": the agent's text is already a full sentence.
+            503 | 507 if !detail.is_empty() => Err(ClientError::Other(detail)),
             _ => Err(ClientError::Other(format!("HTTP {status}: {detail}"))),
         }
     }
@@ -153,6 +159,8 @@ impl AgentClient {
                     out.folder = ev["folder"].as_str().map(String::from);
                 }
                 "cached" => out.cached = true,
+                "missing" => out.missing = ev["program"].as_str().map(String::from),
+                "restart_needed" => out.restart_needed = true,
                 "claude" => {
                     if ev["event"]["type"] == "result" {
                         out.result_text = ev["event"]["result"].as_str().map(String::from);
@@ -184,6 +192,16 @@ impl AgentClient {
 
     pub fn delegate(&self, task: &str, files: &[String], on_event: impl FnMut(&Value)) -> Result<JobOutcome> {
         self.stream("/delegate", &json!({"task": task, "files": files, "stream": true}), on_event)
+    }
+
+    /// Programs PC Bridge can install on the PC, which are installed, and the free disk space.
+    pub fn programs(&self) -> Result<Value> {
+        self.get_json("/programs", 20)
+    }
+
+    /// Install a program from the PC's catalog (e.g. "ffmpeg"), streaming the installer's output.
+    pub fn install_program(&self, program: &str, on_event: impl FnMut(&Value)) -> Result<JobOutcome> {
+        self.stream("/programs/install", &json!({"program": program, "stream": true}), on_event)
     }
 
     pub fn stat(&self, rel: &str) -> Result<Value> {

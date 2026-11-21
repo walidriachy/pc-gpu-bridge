@@ -69,6 +69,8 @@ fn run_gui(minimized: bool) {
         ))
         .manage(app_state.clone())
         .setup(move |app| {
+            // Mac release builds: run from /Applications so updates work (may restart from there).
+            mac::heal_install_location(app.handle(), minimized);
             tray::build(app.handle())?;
             updates::spawn_auto_update(app.handle().clone());
             if minimized {
@@ -136,6 +138,8 @@ fn run_gui(minimized: bool) {
             win::win_claude_check,
             win::win_setup_agent,
             win::win_pairing_code,
+            win::win_programs,
+            win::win_install_program,
             win::win_configure_wol,
             win::win_power,
             win::win_set_autostart,

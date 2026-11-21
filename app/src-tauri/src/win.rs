@@ -21,6 +21,7 @@ pub struct WinState {
     pub mac_address: String,
     pub want_ollama: bool,
     pub want_comfy: bool,
+    pub want_pytorch: bool,
     pub use_wsl: bool,
 }
 
@@ -541,6 +542,87 @@ pub async fn win_pairing_code(fresh: bool) -> Result<Value, String> {
     .await
 }
 
+// ---------------------------------------------------------------- Programs (installed by the helper)
+
+const HELPER_MISSING: &str =
+    "The PC Bridge helper isn't installed yet. Finish the setup's “Install the tools” step first.";
+
+/// Turn a client error into one plain sentence for the Programs card.
+fn friendly_error(e: bridge_core::client::ClientError) -> String {
+    use bridge_core::client::ClientError;
+    match e {
+        ClientError::Unreachable(_) => {
+            "The PC Bridge helper isn't running. Click “Restart the helper” in Settings, then try again.".into()
+        }
+        ClientError::Unauthorized => {
+            "The helper didn't accept this app's key. Click “Restart the helper” in Settings, then try again.".into()
+        }
+        // An older helper has no /programs page yet.
+        ClientError::Refused(d) if d == "Not Found" => {
+            "The helper on this PC is out of date. Click “Restart the helper” in Settings to update it.".into()
+        }
+        ClientError::Refused(d) => d,
+        ClientError::Other(m) => error_detail(&m).to_string(),
+    }
+}
+
+/// "HTTP 507 Insufficient Storage: Not enough space…" -> "Not enough space…"
+pub fn error_detail(msg: &str) -> &str {
+    match msg.strip_prefix("HTTP ").and_then(|rest| rest.split_once(": ")) {
+        Some((_, detail)) if !detail.trim().is_empty() => detail,
+        _ => msg,
+    }
+}
+
+/// winget exit codes that mean "it's already there" or "installed, restart to finish": a success.
+/// (The helper already turns these into 0; this covers an older helper.)
+pub fn install_succeeded(code: i64) -> bool {
+    // 0x8A15002B: no newer version to upgrade to; 0x8A150061: already installed;
+    // 0x8A150109: installed, the PC must restart to finish.
+    matches!(code as u32, 0 | 0x8A15_002B | 0x8A15_0061 | 0x8A15_0109)
+}
+
+/// The `{ok, restart_needed, exit_code, log_tail}` the UI shows, from a finished install
+/// (`exit_code`, `log` and `restart_needed`).
+pub fn install_result(job: &Value) -> Value {
+    let code = job["exit_code"].as_i64().unwrap_or(-1);
+    let log = job["log"].as_str().unwrap_or("");
+    let lines: Vec<&str> = log.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(12)..].join("\n");
+    let restart = job["restart_needed"] == true || code as u32 == 0x8A15_0109;
+    json!({"ok": install_succeeded(code), "restart_needed": restart, "exit_code": code, "log_tail": tail})
+}
+
+/// What the helper can install, which are already there, and the free space on the C: drive.
+#[tauri::command]
+pub async fn win_programs() -> Result<Value, String> {
+    blocking(|| {
+        let c = local_client().ok_or(HELPER_MISSING)?;
+        c.get_json("/programs", 30).map_err(friendly_error)
+    })
+    .await
+}
+
+/// Install one program from the helper's list (winget or pip, never an arbitrary command).
+#[tauri::command]
+pub async fn win_install_program(key: String) -> Result<Value, String> {
+    blocking(move || {
+        let c = local_client().ok_or(HELPER_MISSING)?;
+        // Follow the install's own output until it ends, however long it takes. If the same
+        // program is already being installed (Claude asked too), the helper streams that one.
+        let mut log = String::new();
+        let o = c
+            .install_program(&key, |ev| {
+                if let Some(d) = ev["data"].as_str() {
+                    log.push_str(d);
+                }
+            })
+            .map_err(friendly_error)?;
+        Ok(install_result(&json!({"exit_code": o.exit_code, "log": log, "restart_needed": o.restart_needed})))
+    })
+    .await
+}
+
 // ---------------------------------------------------------------- Wake-on-LAN & power
 
 const WOL_SCRIPT: &str = r#"
@@ -715,6 +797,41 @@ mod tests {
         assert_eq!(agent_action("0.1.2", None, Some("0.1.2")), AgentAction::Nothing);
         // Not running and never stamped (installed by 0.1.1 or older).
         assert_eq!(agent_action("0.1.2", None, None), AgentAction::Reinstall);
+    }
+
+    #[test]
+    fn install_errors_keep_only_the_helpers_sentence() {
+        assert_eq!(
+            error_detail("HTTP 507 Insufficient Storage: Not enough space on the PC's C:\\ drive"),
+            "Not enough space on the PC's C:\\ drive"
+        );
+        assert_eq!(error_detail("HTTP 503 Service Unavailable: "), "HTTP 503 Service Unavailable: ");
+        assert_eq!(error_detail("something else"), "something else");
+        use bridge_core::client::ClientError;
+        assert!(friendly_error(ClientError::Unreachable("refused".into())).contains("Restart the helper"));
+        assert!(friendly_error(ClientError::Refused("Not Found".into())).contains("out of date"));
+        assert_eq!(friendly_error(ClientError::Refused("PC Bridge doesn't know".into())), "PC Bridge doesn't know");
+    }
+
+    #[test]
+    fn install_result_reports_success_and_the_last_log_lines() {
+        let log: String = (1..=20).map(|i| format!("line {i}\r\n\n")).collect();
+        let r = install_result(&json!({"exit_code": 0, "log": log}));
+        assert_eq!(r["ok"], true);
+        let tail = r["log_tail"].as_str().unwrap();
+        assert_eq!(tail.lines().count(), 12);
+        assert!(tail.starts_with("line 9") && tail.ends_with("line 20"), "{tail}");
+        assert_eq!(install_result(&json!({"exit_code": 1, "log": ""}))["ok"], false);
+        assert_eq!(install_result(&json!({"exit_code": null}))["exit_code"], -1);
+        // winget "already installed / nothing to upgrade", signed or unsigned.
+        assert!(install_succeeded(-1978335189) && install_succeeded(0x8A15_002B) && install_succeeded(0x8A15_0061));
+        // Installed, restart needed: a success the card reports as "restart the PC".
+        let r = install_result(&json!({"exit_code": 0, "log": "", "restart_needed": true}));
+        assert_eq!((r["ok"].clone(), r["restart_needed"].clone()), (json!(true), json!(true)));
+        assert_eq!(install_result(&json!({"exit_code": 0x8A15_0109u32}))["restart_needed"], true);
+        assert_eq!(install_result(&json!({"exit_code": 0}))["restart_needed"], false);
+        assert!(!install_succeeded(0x8A15_010A)); // restart first, then install again
+        assert!(!install_succeeded(-1) && !install_succeeded(127));
     }
 
     #[test]

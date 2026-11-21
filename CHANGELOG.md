@@ -4,6 +4,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-11-21
+
+### Added
+- **Missing programs: a clear message and a one-click install.** When a job needs a program the PC doesn't have, the job now says exactly what's missing, for example *"Blender isn't installed on the PC. Ask Claude to install it (tool pc_install, program "blender"), or on the PC open PC Bridge → Settings → Programs → Install."* The PC notices when the program can't be started (exit code 127), when a Python job reports `No module named 'torch'` (or `torchvision`, `torchaudio`), and when a script's shell says a known program "is not recognized" or "not found" (only real shell messages, not other errors that happen to name a program). A job that ran a different Python (a venv, conda, `py -3.11`) is told to install the package into that Python with pip instead, because `pc_install` only fills the PC's main Python. As before, a job the PC accepted is never run again on the Mac.
+- **New Claude tool `pc_install`** (15 tools now). It installs one program on the PC: `ffmpeg`, `blender`, `pytorch`, `ollama`, `node`, `docker` or `git`. Claude is told to ask you first and to warn you that Windows may show a "Yes" prompt on the PC. `pc_run`, `pc_docker` and `pc_node_build` results end with a note when a program was missing, and `pc_status` adds a "Programs on the PC: installed … · not installed …" line (the PC's status now also reports `pytorch` and `git`, and finds Blender outside PATH).
+- **The CLAUDE.md block has one new line:** if a job fails because a program is missing on the PC, offer to install it with `pc_install` (ask the user first). Click **Settings → Reconnect to Claude** on the Mac to add it to an existing setup.
+- **PC: Settings → Programs.** Every program PC Bridge can install, what it's for, its size, and ✅ **Installed** or an **Install** button. It shows the free space on the Windows drive, warns under 10 GB, turns off **Install** when a program won't fit, and keeps the installer's last lines under **Show what the installer said**.
+- **PC wizard, step 6: "PyTorch (GPU)"** (about 6 GB) next to Ollama and ComfyUI, with a free-space check on drive C:. The wizard's final GPU test needs it.
+- **PC helper: `GET /programs` and `POST /programs/install`.** Only programs from a fixed catalog can be installed, with winget or pip, in their normal Windows place, never in the PCBridge or shared folders. The helper checks for the program's size plus 2 GB of free space first (otherwise it answers with how much is free and needed), and a second request for the same program follows the install already running, even when both arrive at the same moment. winget's "already installed" answer counts as success; "installed, restart the PC to finish" counts as success and says to restart (in `pc_install` and on the Programs card), and "restart before installing" says to restart and try again. pip installs PyTorch without keeping a second copy of the download in its cache.
+- **Installs don't hold up jobs.** Installs have their own lane, one at a time, so a long PyTorch download or a Windows "Yes" prompt nobody is there to click never makes `pc_run` or `pc_delegate_task` wait, and an install doesn't wait for a long render. If a winget install shows no progress for 90 seconds, its log says Windows may be waiting for someone to click **Yes** on the PC. After 20 minutes without progress (or 3 hours in all) the install is stopped with a plain explanation.
+- The job summary has new `missing` (the missing program's key, or `null`) and `restart_needed` fields.
+
+### Changed
+- **Faster jobs on big shared folders.** To find a job's results, the PC now looks only in the folder the job ran in (2 levels of sub-folders; all of it for worker-Claude jobs) and in folders named on the command line inside the PCBridge folder (up to 32; for Blender's `-o //renders/…`, the `.blend` file's folder), with a 5-second limit per check. Before, it listed the whole folder before and after every job, which took 20–45 s on very big shared folders. **Limitation:** files a job writes anywhere else in a shared folder still reach the Mac through Syncthing, but aren't listed as the job's outputs, copied into the job folder or reused by the result cache.
+- **`python` jobs run the PC's own Python.** A bare `python` or `python3` now runs the Python that PyTorch is installed into. PC Bridge's private Python and the Microsoft Store placeholder (which only opens the Store) are skipped; a Python installed from the Microsoft Store is used.
+- **Blender is found even when it isn't on PATH.** Blender's installer doesn't add itself to PATH, so the PC also looks in `C:\Program Files\Blender Foundation\` and uses the newest version.
+- When the PC refuses a request because space is low or winget/Python is missing, the Mac shows the PC's own plain sentence instead of "HTTP 507 …" / "HTTP 503 …". This also applies to the existing Ollama and ComfyUI messages.
+- "Program not found on the PC" now adds "(it isn't installed there, or Windows can't find it)".
+
+### Fixed
+- **Mac: "PC Bridge is damaged and can't be opened" (0.1.2).** The Mac app only had the compiler's temporary signature. It's now signed ad-hoc (free, no Apple certificate) before the `.dmg` and the update file are made, so macOS offers the normal **Open Anyway** instead. The release workflow checks the signature of the app, the update file and the `.dmg`, and stops if one is missing.
+- **Mac: the app couldn't update itself after "Open Anyway".** macOS sometimes ran a hidden, read-only copy of the app (App Translocation). At start, PC Bridge now removes the "downloaded from the internet" mark from `/Applications/PC Bridge.app` and restarts from there once. If it isn't in Applications, it asks you to move it there. It only restarts from Applications when the copy there is the same version; a new version opened straight from the `.dmg` asks you to drag it into Applications instead of starting the old one. If Claude's connection or the helper commands still point at the hidden copy (connected while 0.1.2 ran from there), PC Bridge points them at the Applications copy again. 0.1.2 installs that run from the hidden copy can't update themselves: install 0.1.3 by hand once (see the guide).
+- Text from a program's output is no longer garbled when a non-English character is split between two reads.
+
 ## [0.1.2] — 2026-11-21
 
 ### Added
@@ -46,7 +70,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/walidriachy/pc-gpu-bridge/releases/tag/v0.1.0
