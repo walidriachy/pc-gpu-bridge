@@ -130,6 +130,7 @@ Start with **Help → Run diagnostics**. It checks every part and tells you, in 
 | Problem | Fix |
 |---|---|
 | Mac says "Can't reach PC Bridge" | Is the PC on, with PC Bridge running (dot in the tray, near the clock)? Is Tailscale connected on **both** computers with the **same account**? |
+| Step 5 says Claude Code "didn't finish" and mentions `.local\bin is not in your PATH` | Update to PC Bridge **0.1.1 or newer** and click **Check again**. It finds Claude Code and fixes PATH for you. You don't need to edit Environment Variables yourself |
 | Pairing code rejected | Codes expire after 15 minutes and allow 5 tries. On the PC, click **Get a new code** |
 | Results don't appear on the Mac | Wait a few seconds; big files take time to sync. Check the file is inside a folder you shared in wizard step 4 |
 | PC doesn't wake up | Wake-on-LAN only works when the Mac is on the **same home network** as the PC. Check the BIOS setting (Part 3) |

@@ -3,7 +3,7 @@
 > **Living document.** Updated at the end of every phase in the same commit as the work.
 > Status keys: ✅ done · 🔄 in progress · ⏳ next · 🧊 later / known limitation
 
-_Last updated: 2026-11-21 — **v0.1.0 released** (public, MIT): installers on the Releases page; CI green on Linux, macOS and Windows_
+_Last updated: 2026-11-21 — **v0.1.1** (Windows Claude Code PATH fix); v0.1.0 public (MIT); CI green on Linux, macOS and Windows_
 
 ## Architecture in one picture
 
@@ -112,6 +112,7 @@ timeline
 - **2026-11-21** Real-agent e2e found that POSIX agent roots (tests, WSL2 mode) need `/` paths and keep `python3`; fixed in `PathMapper`/`plan`.
 - **2026-11-21** Both apps show Mac vs PC RAM: the Mac posts its memory to the agent on every status poll (window + tray), the PC app reads it from `/status.peer_memory`.
 - **2026-11-21** macOS Tailscale CLI is the app binary; started from a GUI app (no TTY) it tries to open its GUI → always set `TAILSCALE_BE_CLI=1` (found by the first real user run). Added `pc-bridge doctor` to check this without the window.
+- **2026-11-21** (v0.1.1) Claude Code's native Windows installer leaves `claude.exe` in `%USERPROFILE%\.local\bin` off PATH → app finds it, adds it to the *user* PATH via the registry (keeps `%VARS%`, no admin), and passes the full path to the agent; the agent also falls back to `~/.local/bin`. Found by the first real Windows run.
 - **2026-11-21** Open-sourced under MIT with full contributor docs.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 

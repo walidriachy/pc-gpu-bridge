@@ -257,3 +257,16 @@ def test_syncthing_calls(tmp_path):
     assert all(c[2] == "k" for c in calls)
     folder_body = next(c[3] for c in calls if "/config/folders/" in c[1])
     assert {d["deviceID"] for d in folder_body["devices"]} == {"MAC-ID", "PC-ID"}
+
+
+def test_resolve_claude_finds_native_install_off_path(tmp_path, monkeypatch):
+    from pcbridge_agent.config import resolve_claude
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert resolve_claude("claude") is None
+    exe = tmp_path / ".local" / "bin" / "claude.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    assert resolve_claude("claude") == str(exe)
+    assert resolve_claude(str(exe)) == str(exe)

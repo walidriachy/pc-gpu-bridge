@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -18,6 +19,20 @@ SUBDIRS = ("workspace", "jobs", "worker", "cache", "models", "logs", "config")
 
 class PathOutsideRoot(ValueError):
     """Raised when a path would point outside the PCBridge root."""
+
+
+def resolve_claude(cmd: str = "claude") -> str | None:
+    """Full path of Claude Code, also when its native installer's folder (~/.local/bin) isn't on PATH."""
+    found = shutil.which(cmd)
+    if found:
+        return found
+    if Path(cmd).is_file():
+        return cmd
+    local_bin = Path.home() / ".local" / "bin"
+    for name in ("claude.exe", "claude"):
+        if (local_bin / name).is_file():
+            return str(local_bin / name)
+    return None
 
 
 def default_root() -> Path:

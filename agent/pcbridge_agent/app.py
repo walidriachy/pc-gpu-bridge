@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .cache import ResultCache, cache_key
 from .cleanup import cleanup_old
-from .config import PathOutsideRoot, Settings, check_argv_paths, safe_path
+from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path
 from .gpu import query_gpus
 from .jobs import Job, JobQueue
 from .memory import memory_info
@@ -181,6 +181,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     peer_memory: dict[str, Any] = {}
 
+    def tools_present() -> dict[str, bool]:
+        found = {t: bool(shutil.which(t)) for t in TOOLS}
+        found["claude"] = bool(resolve_claude(settings.claude_cmd))
+        return found
+
     @app.get("/status", dependencies=[Depends(auth)])
     async def status():
         running = [queue.jobs[j].summary() for j in queue.running if j in queue.jobs]
@@ -195,7 +200,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "max_parallel_jobs": settings.max_parallel_jobs,
             "cache_bytes": cache.size(),
             "memory": await asyncio.to_thread(memory_info),
-            "tools": {t: bool(shutil.which(t)) for t in TOOLS},
+            "tools": tools_present(),
             "devices": pairing.devices(),
             "peer_memory": peer_memory or None,
         }
@@ -287,7 +292,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/delegate", dependencies=[Depends(auth)])
     async def delegate(req: DelegateRequest):
-        claude = shutil.which(settings.claude_cmd) or settings.claude_cmd
+        claude = resolve_claude(settings.claude_cmd) or settings.claude_cmd
         job = queue.create("delegate", req.name or req.task[:40], [], root / "worker", gpu=True)
         wdir = root / "worker" / job.id
         wdir.mkdir(parents=True, exist_ok=True)

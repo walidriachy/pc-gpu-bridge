@@ -84,6 +84,48 @@ fn refresh_path() {
     }
 }
 
+// ---------------------------------------------------------------- Claude Code location
+
+/// Claude Code's native Windows installer puts `claude.exe` in `%USERPROFILE%\.local\bin`,
+/// which is often not on PATH. Find it either way.
+pub fn claude_exe() -> Option<String> {
+    which("claude").or_else(|| {
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+        let dir = PathBuf::from(home).join(".local").join("bin");
+        ["claude.exe", "claude"].iter().map(|n| dir.join(n)).find(|p| p.is_file()).map(|p| p.display().to_string())
+    })
+}
+
+/// PowerShell that appends `dir` to the *user* PATH if missing (no admin), keeping %VARS% intact,
+/// and tells Windows so new windows see it.
+fn add_to_user_path_script(dir: &str) -> String {
+    let d = dir.replace('\'', "''");
+    format!(
+        "$d='{d}'; $k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true); \
+         $p=[string]$k.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); \
+         if (-not (($p -split ';') -contains $d)) {{ \
+           $n = if ([string]::IsNullOrWhiteSpace($p)) {{ $d }} else {{ $p.TrimEnd(';') + ';' + $d }}; \
+           $k.SetValue('Path',$n,[Microsoft.Win32.RegistryValueKind]::ExpandString) }}; $k.Close(); \
+         [Environment]::SetEnvironmentVariable('PCBRIDGE_PATH_REFRESH','1','User'); \
+         [Environment]::SetEnvironmentVariable('PCBRIDGE_PATH_REFRESH',$null,'User')"
+    )
+}
+
+/// Make sure Claude Code is usable: put its folder on the user PATH and tell the agent its full path.
+fn ensure_claude_ready() -> Option<String> {
+    let exe = claude_exe()?;
+    if cfg!(windows) {
+        if let Some(dir) = Path::new(&exe).parent() {
+            if which("claude").is_none() {
+                powershell(&add_to_user_path_script(&dir.display().to_string()));
+                refresh_path();
+            }
+        }
+        let _ = update_agent_settings(json!({ "claude_cmd": exe }));
+    }
+    Some(exe)
+}
+
 // ---------------------------------------------------------------- GPU
 
 pub fn parse_smi(out: &str) -> Option<(String, String, f64)> {
@@ -134,10 +176,13 @@ fn tool_present(id: &str) -> (bool, String) {
             // The Microsoft Store stub prints nothing and fails.
             (o.ok() && o.stdout.contains("Python 3"), o.stdout.trim().to_string())
         }
-        "claude" => {
-            let o = run("claude", &["--version"]);
-            (o.ok(), o.stdout.trim().to_string())
-        }
+        "claude" => match ensure_claude_ready() {
+            Some(exe) => {
+                let o = run(&exe, &["--version"]);
+                (o.ok(), o.stdout.trim().to_string())
+            }
+            None => (false, String::new()),
+        },
         other => {
             let check = PACKAGES.iter().find(|p| p.0 == other).map(|p| p.2).unwrap_or(other);
             (which(check).is_some(), String::new())
@@ -205,7 +250,12 @@ pub async fn win_tailscale_check() -> Result<Value, String> {
 /// Open a visible console running `claude` so the user can log in in their browser.
 #[tauri::command]
 pub fn win_claude_login() -> Result<(), String> {
+    let exe = ensure_claude_ready().ok_or("Claude Code isn't installed yet. Click “Do it for me” first.")?;
+    // Run `claude` by name with its folder on PATH: avoids quoting problems with spaces in user names.
+    let dir = Path::new(&exe).parent().map(|d| d.display().to_string()).unwrap_or_default();
+    let path = format!("{dir};{}", std::env::var("PATH").unwrap_or_default());
     std::process::Command::new("cmd")
+        .env("PATH", path)
         .args(["/c", "start", "Claude login", "cmd", "/k", "claude"])
         .spawn()
         .map(|_| ())
@@ -216,9 +266,12 @@ pub fn win_claude_login() -> Result<(), String> {
 pub async fn win_claude_check() -> Result<Value, String> {
     blocking(|| {
         refresh_path();
-        let o = run("claude", &["-p", "Reply with just the word: ready", "--output-format", "text"]);
+        let Some(exe) = ensure_claude_ready() else {
+            return Ok(json!({"installed": false, "logged_in": false, "detail": ""}));
+        };
+        let o = run(&exe, &["-p", "Reply with just the word: ready", "--output-format", "text"]);
         let ready = o.ok() && o.stdout.to_lowercase().contains("ready");
-        Ok(json!({"installed": which("claude").is_some(), "logged_in": ready, "detail": o.stderr.lines().next().unwrap_or("")}))
+        Ok(json!({"installed": true, "logged_in": ready, "detail": o.stderr.lines().next().unwrap_or("")}))
     })
     .await
 }
@@ -502,4 +555,41 @@ pub async fn run_diagnostics_win(app: tauri::AppHandle) -> Result<Vec<Value>, St
         Ok(out)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_path_script_quotes_user_names_with_spaces_and_apostrophes() {
+        let s = add_to_user_path_script(r"C:\Users\Anigma PC\.local\bin");
+        assert!(s.starts_with(r"$d='C:\Users\Anigma PC\.local\bin';"), "{s}");
+        assert!(s.contains("ExpandString") && s.contains("DoNotExpandEnvironmentNames"));
+        let s = add_to_user_path_script(r"C:\Users\O'Neil\.local\bin");
+        assert!(s.starts_with(r"$d='C:\Users\O''Neil\.local\bin';"), "{s}");
+        // Balanced braces after format! escaping.
+        assert_eq!(s.matches('{').count(), s.matches('}').count());
+    }
+
+    /// Runs the real script on Windows (CI): the folder must land in the user PATH exactly once.
+    #[cfg(windows)]
+    #[test]
+    fn user_path_script_really_updates_user_path() {
+        let dir = std::env::temp_dir().join("pcbridge path test");
+        let d = dir.display().to_string();
+        let read = || powershell("[Environment]::GetEnvironmentVariable('Path','User')").stdout;
+        let before = read();
+        for _ in 0..2 {
+            let o = powershell(&add_to_user_path_script(&d));
+            assert!(o.ok(), "script failed: {} {}", o.stdout, o.stderr);
+        }
+        let after = read();
+        assert_eq!(after.split(';').filter(|p| p.trim() == d).count(), 1, "{after}");
+        // Put the runner's PATH back the way it was.
+        let restore =
+            format!("[Environment]::SetEnvironmentVariable('Path','{}','User')", before.trim().replace('\'', "''"));
+        assert!(powershell(&restore).ok());
+        assert!(!before.contains(&d));
+    }
 }
