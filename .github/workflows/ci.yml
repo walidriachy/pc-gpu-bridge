@@ -99,7 +99,8 @@ jobs:
           bash scripts/e2e-real-agent.sh
       - name: Build installer (${{ matrix.bundles }})
         working-directory: app
-        run: npx tauri build --bundles ${{ matrix.bundles }}
+        # CI builds aren't released, so they aren't signed for the updater.
+        run: npx tauri build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.ci.conf.json
       - uses: actions/upload-artifact@v6
         with:
           name: installer-${{ runner.os }}

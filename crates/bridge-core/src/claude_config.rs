@@ -11,7 +11,7 @@ pub const PATH_END: &str = "# <<< PC Bridge <<<";
 
 pub const CLAUDE_MD_SNIPPET: &str = r#"## PC Bridge: where to run heavy work
 
-This Mac is paired with a Windows PC (RTX 3090 GPU, 24 GB VRAM, 32 GB RAM) through PC Bridge.
+This Mac is paired with a Windows PC with an NVIDIA GPU through PC Bridge (`pc_gpu` and `pc_memory` show its exact graphics card and memory).
 
 Send to the PC (use the `pc-bridge` MCP tools, or just run the command — shims redirect it):
 - Video renders and encodes (ffmpeg, blender) → `pc_run`

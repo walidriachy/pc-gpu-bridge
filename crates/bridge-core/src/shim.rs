@@ -90,7 +90,30 @@ pub struct ShimResult {
 }
 
 fn looks_like_path(s: &str) -> bool {
-    !s.is_empty() && !s.starts_with('-') && !s.contains("://") && (s.contains('/') || s.contains('.'))
+    // Characters that never appear in a Mac file name but are common in inline code
+    // (`powershell -Command '...'`, `node -e '...'`): such an argument is not a path.
+    const CODE_CHARS: &[char] = &['\n', '\r', ';', '|', '$', '{', '}', '<', '>', '"', '`', '\\'];
+    !s.is_empty()
+        && s.len() <= 1024
+        && !s.starts_with('-')
+        && !s.contains("://")
+        && !s.contains(CODE_CHARS)
+        && (s.contains('/') || s.contains('.'))
+}
+
+/// Flags whose next argument is inline code, never a path.
+fn is_code_flag(tool: &str, arg: &str) -> bool {
+    let tool = tool.to_ascii_lowercase();
+    let tool = tool.trim_end_matches(".exe");
+    let arg_l = arg.to_ascii_lowercase();
+    match tool {
+        t if t.starts_with("python") => arg == "-c",
+        "node" => matches!(arg, "-e" | "--eval" | "-p" | "--print"),
+        "powershell" | "pwsh" => matches!(arg_l.as_str(), "-command" | "-c" | "-encodedcommand" | "-ec"),
+        "bash" | "sh" | "zsh" => arg == "-c",
+        "cmd" => matches!(arg_l.as_str(), "/c" | "/k"),
+        _ => false,
+    }
 }
 
 /// Real tool to use on the PC (Windows has `python`, not `python3`).
@@ -123,8 +146,8 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
             argv.push(a.clone());
             continue;
         }
-        // python -c CODE: never treat code as a path.
-        if (tool.starts_with("python")) && a == "-c" {
+        // python -c CODE, powershell -Command CODE, …: never treat code as a path.
+        if is_code_flag(tool, a) {
             skip_next = true;
             argv.push(a.clone());
             continue;
@@ -336,11 +359,9 @@ impl Engine {
                 r
             }
             Err(e) => {
-                let why = format!("The PC job couldn't run ({e}), so it ran on the Mac instead");
-                if self.cfg.notify_on_fallback {
-                    io.notify(&why);
-                }
                 if force == Some(Target::Pc) {
+                    let why = format!("The PC job couldn't run: {e}");
+                    io.notify(&why);
                     return ShimResult {
                         exit_code: 3,
                         target: Target::Pc,
@@ -350,6 +371,10 @@ impl Engine {
                         seconds: 0.0,
                         decision: Some(decision),
                     };
+                }
+                let why = format!("The PC job couldn't run ({e}), so it ran on the Mac instead");
+                if self.cfg.notify_on_fallback {
+                    io.notify(&why);
                 }
                 self.local_fallback(tool, args, cwd, why, Some(decision))
             }
@@ -378,33 +403,61 @@ impl Engine {
             cache: true,
             env: Default::default(),
         };
-        let outcome = client.run(&req, |ev| match ev["type"].as_str() {
-            Some("stdout") => io.out(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
-            Some("stderr") => io.err(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
-            Some("queued") if ev["position"].as_u64().unwrap_or(0) > 1 => {
-                io.err(&format!("[PC Bridge] queued on the PC (position {})\n", ev["position"]));
+        // Once the PC has accepted the job, never run it a second time on the Mac.
+        let mut accepted = false;
+        let result = client.run(&req, |ev| {
+            accepted = true;
+            match ev["type"].as_str() {
+                Some("stdout") => io.out(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
+                Some("stderr") => io.err(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
+                Some("queued") if ev["position"].as_u64().unwrap_or(0) > 1 => {
+                    io.err(&format!("[PC Bridge] queued on the PC (position {})\n", ev["position"]));
+                }
+                Some("cached") => io.err("[PC Bridge] same job ran before: reusing the cached result\n"),
+                _ => {}
             }
-            Some("cached") => io.err("[PC Bridge] same job ran before: reusing the cached result\n"),
-            _ => {}
-        })?;
+        });
+        let outcome = match result {
+            Ok(o) => o,
+            Err(e) if accepted => {
+                io.err(&format!(
+                    "[PC Bridge] lost the connection to the PC while the job was running ({e}). \
+                     It may still finish there: see the Jobs tab.\n"
+                ));
+                return Ok(ShimResult {
+                    exit_code: 1,
+                    target: Target::Pc,
+                    reason: "connection to the PC lost during the job".into(),
+                    outputs: vec![],
+                    job_id: None,
+                    seconds: start.elapsed().as_secs_f64(),
+                    decision: None,
+                });
+            }
+            Err(e) => return Err(e),
+        };
         // Bring outputs back: give Syncthing a moment, then pull anything still missing/different.
         let mut outputs = vec![];
         let deadline = Instant::now() + Duration::from_secs(self.cfg.sync_wait_secs);
         for rel in &outcome.outputs {
             let Some(mac) = mapper.rel_to_mac(rel) else { continue };
-            let pc_size = client.stat(rel).ok().and_then(|s| s["size"].as_u64());
+            // The job already ran: a file we can't fetch is a warning, never a reason to run it again.
+            let Some(pc_size) = client.stat(rel).ok().and_then(|s| s["size"].as_u64()) else { continue };
             loop {
                 let local = std::fs::metadata(&mac).ok().map(|m| m.len());
-                if local.is_some() && local == pc_size {
+                if local == Some(pc_size) {
+                    outputs.push(mac);
                     break;
                 }
                 if Instant::now() >= deadline {
-                    client.pull_file(rel, &mac)?;
+                    match client.pull_file(rel, &mac) {
+                        Ok(_) => outputs.push(mac),
+                        Err(e) => io.err(&format!("[PC Bridge] couldn't bring back {}: {e}\n", mac.display())),
+                    }
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
-            outputs.push(mac);
         }
         Ok(ShimResult {
             exit_code: outcome.exit_code,
@@ -488,6 +541,27 @@ mod tests {
         std::fs::write(dir.path().join("x.mov"), b"1").unwrap();
         let m = PathMapper::new(vec![], r"D:\PCBridge");
         assert!(plan(&m, "ffmpeg", &s(&["-i", "x.mov", "o.mp4"]), dir.path()).is_err());
+    }
+
+    #[test]
+    fn inline_scripts_are_not_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = PathMapper::new(
+            vec![SharedFolder { mac_path: dir.path().display().to_string(), name: "w".into() }],
+            r"D:\PCBridge",
+        );
+        let script = r#"$m=[Environment]::GetEnvironmentVariable("Path","Machine"); Get-Command ffmpeg | % Source"#;
+        let p = plan(&m, "powershell", &s(&["-NoProfile", "-Command", script]), dir.path()).unwrap();
+        assert_eq!(p.argv[3], script);
+        // Even without a code flag, code-looking text isn't mistaken for an output file.
+        let p = plan(&m, "pwsh", &s(&["-File", "x.ps1", "-Note", "a.b; c"]), dir.path()).unwrap();
+        assert_eq!(p.argv[4], "a.b; c");
+        let p = plan(&m, "node", &s(&["-e", "console.log(1.5)"]), dir.path()).unwrap();
+        assert_eq!(p.argv[2], "console.log(1.5)");
+        // Real file names with spaces and brackets are still paths.
+        std::fs::write(dir.path().join("my clip (1).mov"), b"1").unwrap();
+        let p = plan(&m, "ffmpeg", &s(&["-i", "my clip (1).mov", "out.mp4"]), dir.path()).unwrap();
+        assert_eq!(p.argv[2], r"D:\PCBridge\workspace\w\my clip (1).mov");
     }
 
     #[test]

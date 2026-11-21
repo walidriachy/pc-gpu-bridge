@@ -25,7 +25,7 @@ flowchart LR
     direction TB
     APPW["PC Bridge app<br/>(system tray)"]
     AG["Python agent (FastAPI :8765)<br/>auth · queue · cache · cleanup"]
-    GPU["NVIDIA GPU (NVENC, CUDA)<br/>32 GB RAM"]
+    GPU["NVIDIA GPU (NVENC, CUDA)<br/>+ the PC's RAM"]
     WC["Worker Claude<br/>claude -p in PCBridge/worker"]
     OL["Ollama / ComfyUI (optional)"]
     STP["Syncthing"]

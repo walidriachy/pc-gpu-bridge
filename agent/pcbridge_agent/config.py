@@ -21,9 +21,64 @@ class PathOutsideRoot(ValueError):
     """Raised when a path would point outside the PCBridge root."""
 
 
+def _merge_path(parts: list[str]) -> str:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in parts:
+        for entry in part.split(os.pathsep):
+            entry = entry.strip().strip('"')
+            key = os.path.normcase(os.path.normpath(entry)) if entry else ""
+            if entry and key not in seen:
+                seen.add(key)
+                out.append(entry)
+    return os.pathsep.join(out)
+
+
+def _registry_path() -> list[str]:
+    """Machine + user PATH exactly as Windows stores them right now (with %VARS% expanded)."""
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    keys = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+    )
+    parts: list[str] = []
+    for hive, sub in keys:
+        try:
+            with winreg.OpenKey(hive, sub) as key:
+                value, _ = winreg.QueryValueEx(key, "Path")
+                parts.append(winreg.ExpandEnvironmentStrings(str(value)))
+        except OSError:
+            continue
+    return parts
+
+
+def system_path() -> str:
+    """The PATH to look programs up in.
+
+    The agent can run for days, so its own PATH goes stale: anything installed after it started
+    (FFmpeg via winget, Claude Code, Blender…) would look "not found". On Windows we re-read the
+    registry every time, and add the folders winget and Claude's native installer use.
+    """
+    extra: list[str] = []
+    if sys.platform == "win32":
+        extra.append(str(Path.home() / ".local" / "bin"))
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            extra.append(str(Path(local) / "Microsoft" / "WinGet" / "Links"))
+    return _merge_path([*_registry_path(), os.environ.get("PATH", ""), *extra])
+
+
+def which(cmd: str) -> str | None:
+    """``shutil.which`` against the fresh PATH (see :func:`system_path`)."""
+    return shutil.which(cmd, path=system_path())
+
+
 def resolve_claude(cmd: str = "claude") -> str | None:
     """Full path of Claude Code, also when its native installer's folder (~/.local/bin) isn't on PATH."""
-    found = shutil.which(cmd)
+    found = which(cmd)
     if found:
         return found
     if Path(cmd).is_file():

@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import system_path
+
 TERMINAL = {"done", "failed", "cancelled"}
 
 
@@ -103,17 +105,65 @@ class Job:
             await self._changed.wait()
 
 
-def snapshot(folder: Path) -> dict[str, float]:
-    """Map of file -> mtime for detecting what a job created or changed."""
-    out = {}
-    if folder.exists():
-        for p in folder.rglob("*"):
-            if p.is_file():
-                try:
-                    out[str(p)] = p.stat().st_mtime_ns
-                except OSError:
-                    pass
+# Folders that never hold a job's results but can contain hundreds of thousands of files.
+SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    ".next",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".stfolder",
+    ".stversions",
+    ".cache",
+    ".turbo",
+    "dist-newstyle",
+    "target",
+    ".gradle",
+    ".pnpm-store",
+}
+SNAPSHOT_MAX_FILES = 200_000
+
+
+def _is_sync_temp(name: str) -> bool:
+    """Syncthing's in-progress files (and PC Bridge's own partial downloads)."""
+    return name.startswith((".syncthing.", "~syncthing~")) or name.endswith((".tmp", ".pcbridge-part"))
+
+
+def snapshot(folder: Path) -> dict[str, int]:
+    """Map of file -> mtime for detecting what a job created or changed.
+
+    Walks with ``os.scandir`` (fast on Windows), skips dependency/VCS folders and Syncthing temp
+    files, and stops after :data:`SNAPSHOT_MAX_FILES` files. Run it in a worker thread: on a big
+    shared folder it can take seconds, and the agent must keep answering meanwhile.
+    """
+    out: dict[str, int] = {}
+    stack = [str(folder)]
+    while stack and len(out) < SNAPSHOT_MAX_FILES:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name not in SKIP_DIRS:
+                                stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False) and not _is_sync_temp(entry.name):
+                            out[entry.path] = entry.stat().st_mtime_ns
+                    except OSError:
+                        continue
+        except OSError:
+            continue
     return out
+
+
+def changed_files(before: dict[str, int], after: dict[str, int], started: float) -> list[Path]:
+    """Files the job created or modified.
+
+    Files Syncthing brings in from the Mac while the job runs keep their old (Mac) modification
+    time, so only files modified after the job started count.
+    """
+    since = int((started - 2) * 1e9)
+    return [Path(p) for p, m in after.items() if before.get(p) != m and m >= since]
 
 
 class JobQueue:
@@ -187,57 +237,55 @@ class JobQueue:
             job.emit({"type": "exit", "code": -1, "state": "cancelled"})
             job.write_meta()
             return
-        before = snapshot(job.cwd)
-        job.state = "running"
-        job.started = time.time()
-        job.emit({"type": "started"})
-        code = -1
+        # Keep the slot until outputs are collected, so the next job can't mix its files in.
         try:
-            env = {**os.environ, **job.env}
-            job._proc = await asyncio.create_subprocess_exec(
-                *job.argv,
-                cwd=str(job.cwd),
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.gather(
-                self._pump(job, job._proc.stdout, "stdout"),
-                self._pump(job, job._proc.stderr, "stderr"),
-            )
-            code = await job._proc.wait()
-        except FileNotFoundError:
-            job.emit({"type": "stderr", "data": f"PC Bridge: program not found on the PC: {job.argv[0]}\n"})
-            code = 127
-        except Exception as exc:  # noqa: BLE001 - report everything to the client
-            job.emit({"type": "stderr", "data": f"PC Bridge: failed to start job: {exc}\n"})
-            code = 1
+            before = await asyncio.to_thread(snapshot, job.cwd)
+            job.state = "running"
+            job.started = time.time()
+            job.emit({"type": "started"})
+            code = -1
+            try:
+                fresh = system_path()
+                env = {**os.environ, "PATH": fresh, **job.env}
+                # Resolve the program ourselves: on Windows the child's env PATH isn't used to find it.
+                program = shutil.which(job.argv[0], path=env.get("PATH", fresh)) or job.argv[0]
+                job._proc = await asyncio.create_subprocess_exec(
+                    program,
+                    *job.argv[1:],
+                    cwd=str(job.cwd),
+                    env=env,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.gather(
+                    self._pump(job, job._proc.stdout, "stdout"),
+                    self._pump(job, job._proc.stderr, "stderr"),
+                )
+                code = await job._proc.wait()
+            except FileNotFoundError:
+                job.emit(
+                    {"type": "stderr", "data": f"PC Bridge: program not found on the PC: {job.argv[0]}\n"}
+                )
+                code = 127
+            except Exception as exc:  # noqa: BLE001 - report everything to the client
+                job.emit({"type": "stderr", "data": f"PC Bridge: failed to start job: {exc}\n"})
+                code = 1
+
+            after = await asyncio.to_thread(snapshot, job.cwd)
+            changed = changed_files(before, after, job.started)
+            # Copying outputs (possibly GBs of video) happens off the event loop too.
+            job.outputs.extend(await asyncio.to_thread(self._collect_outputs, changed, job.folder / "output"))
+            job.exit_code = code
+            job.finished = time.time()
+            job.state = "cancelled" if job._cancel else ("done" if code == 0 else "failed")
+            if self.on_finish:
+                try:
+                    await asyncio.to_thread(self.on_finish, job, changed)
+                except Exception:  # noqa: BLE001
+                    pass
         finally:
             await self._release(job)
-
-        after = snapshot(job.cwd)
-        changed = [Path(p) for p, m in after.items() if before.get(p) != m]
-        out_dir = job.folder / "output"
-        for p in changed:
-            try:
-                rel = p.resolve().relative_to(self.root).as_posix()
-            except ValueError:
-                continue
-            job.outputs.append(rel)
-            try:
-                if out_dir not in p.parents:
-                    shutil.copy2(p, out_dir / p.name)
-            except OSError:
-                pass
-        job.exit_code = code
-        job.finished = time.time()
-        job.state = "cancelled" if job._cancel else ("done" if code == 0 else "failed")
-        if self.on_finish:
-            try:
-                self.on_finish(job, changed)
-            except Exception:  # noqa: BLE001
-                pass
         job.write_meta()
         job.emit(
             {
@@ -248,6 +296,21 @@ class JobQueue:
                 "outputs": job.outputs,
             }
         )
+
+    def _collect_outputs(self, changed: list[Path], out_dir: Path) -> list[str]:
+        rels = []
+        for p in changed:
+            try:
+                rel = p.resolve().relative_to(self.root).as_posix()
+            except ValueError:
+                continue
+            rels.append(rel)
+            try:
+                if out_dir not in p.parents:
+                    shutil.copy2(p, out_dir / p.name)
+            except OSError:
+                pass
+        return rels
 
     async def _pump(self, job: Job, stream: asyncio.StreamReader | None, kind: str) -> None:
         if stream is None:

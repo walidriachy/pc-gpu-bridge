@@ -83,7 +83,7 @@ fn tool_defs() -> Value {
     let cmd = json!({"type": "string", "description": "Command line, e.g. \"ffmpeg -i in.mov -c:v libx264 out.mp4\""});
     let cwd = json!({"type": "string", "description": "Folder on the Mac to run in (must be shared with the PC)"});
     json!([
-        {"name": "pc_run", "description": "Run a command on the Windows PC (RTX 3090, 32 GB RAM) with Mac paths translated automatically. Output streams back and output files sync back to the same Mac folder. Use for ffmpeg encodes, GPU Python (torch/diffusers/whisper), blender renders, big data processing.",
+        {"name": "pc_run", "description": "Run a command on the user's Windows PC (NVIDIA GPU; see pc_gpu / pc_memory) with Mac paths translated automatically. Output streams back and output files sync back to the same Mac folder. Use for ffmpeg encodes, GPU Python (torch/diffusers/whisper), blender renders, big data processing.",
          "inputSchema": {"type": "object", "properties": {"command": cmd, "cwd": cwd,
             "mode": {"type": "string", "enum": ["pc", "auto"], "description": "pc = always the PC (default); auto = let the smart router choose"}}, "required": ["command"]}},
         {"name": "pc_run_task", "description": "Generic: run any shell command line on the PC in PowerShell (Mac paths inside shared folders are translated). Use for one-off heavy tasks with no dedicated tool.",
@@ -400,7 +400,7 @@ pub fn handle(engine: &Engine, msg: &Value) -> Option<Value> {
                 "protocolVersion": requested,
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "pc-bridge", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "PC Bridge sends heavy work (GPU encodes, AI inference, renders, RAM-heavy builds) from this Mac to the user's Windows PC (RTX 3090, 32 GB RAM). Prefer pc_run for single commands and pc_delegate_task for multi-step GPU workflows. Keep light edits and git on the Mac."
+                "instructions": "PC Bridge sends heavy work (GPU encodes, AI inference, renders, RAM-heavy builds) from this Mac to the user's Windows PC (NVIDIA GPU, usually much more free RAM than the Mac; pc_gpu and pc_memory give exact figures). Prefer pc_run for single commands and pc_delegate_task for multi-step GPU workflows. Keep light edits and git on the Mac."
             })
         }
         "ping" => json!({}),

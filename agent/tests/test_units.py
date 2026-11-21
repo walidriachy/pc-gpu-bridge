@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+import os
 import sys
 from pathlib import Path
 
@@ -268,5 +269,109 @@ def test_resolve_claude_finds_native_install_off_path(tmp_path, monkeypatch):
     exe = tmp_path / ".local" / "bin" / "claude.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("")
-    assert resolve_claude("claude") == str(exe)
+    assert os.path.normcase(resolve_claude("claude")) == os.path.normcase(str(exe))
     assert resolve_claude(str(exe)) == str(exe)
+
+
+def test_merge_path_dedupes_and_keeps_order():
+    from pcbridge_agent.config import _merge_path
+
+    sep = os.pathsep
+    assert _merge_path([f"/a{sep}/b", f"/b{sep}{sep}/c", '"/d"']) == sep.join(["/a", "/b", "/c", "/d"])
+
+
+def test_which_sees_programs_added_to_path_after_start(tmp_path, monkeypatch):
+    from pcbridge_agent.config import which
+
+    tool = tmp_path / ("pcbridge_fake_tool.bat" if sys.platform == "win32" else "pcbridge_fake_tool")
+    tool.write_text("@echo off\n" if sys.platform == "win32" else "#!/bin/sh\n")
+    tool.chmod(0o755)
+    assert which("pcbridge_fake_tool") is None
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+    assert which("pcbridge_fake_tool")
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not os.environ.get("CI"), reason="edits the Windows registry (CI only)"
+)
+def test_which_reads_user_path_from_registry(tmp_path):
+    """A program installed after the agent started (user PATH changed in the registry) is found."""
+    import winreg
+
+    from pcbridge_agent.config import which
+
+    (tmp_path / "pcbridge_reg_tool.bat").write_text("@echo off\n")
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS) as key:
+        try:
+            old, kind = winreg.QueryValueEx(key, "Path")
+        except OSError:
+            old, kind = None, winreg.REG_EXPAND_SZ
+        winreg.SetValueEx(key, "Path", 0, kind, f"{old};{tmp_path}" if old else str(tmp_path))
+        try:
+            assert str(tmp_path) not in os.environ.get("PATH", "")
+            assert which("pcbridge_reg_tool")
+        finally:
+            if old is None:
+                winreg.DeleteValue(key, "Path")
+            else:
+                winreg.SetValueEx(key, "Path", 0, kind, old)
+
+
+def test_snapshot_skips_dependency_folders_and_sync_temp_files(tmp_path):
+    from pcbridge_agent.jobs import snapshot
+
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("x")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("x")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "video.mp4").write_text("x")
+    (tmp_path / "~syncthing~clip.mov.tmp").write_text("x")
+    (tmp_path / ".syncthing.clip.mov.tmp").write_text("x")
+    found = {Path(p).name for p in snapshot(tmp_path)}
+    assert found == {"video.mp4"}
+
+
+def test_changed_files_ignores_files_synced_in_from_the_mac(tmp_path):
+    import time
+
+    from pcbridge_agent.jobs import changed_files
+
+    started = time.time()
+    old_mtime = int((started - 3600) * 1e9)  # Syncthing keeps the Mac's modification time
+    new_mtime = int((started + 1) * 1e9)
+    before = {"a.mp4": int((started - 7200) * 1e9)}
+    after = {"a.mp4": new_mtime, "synced.mov": old_mtime, "out.mp4": new_mtime}
+    assert sorted(p.name for p in changed_files(before, after, started)) == ["a.mp4", "out.mp4"]
+
+
+def test_agent_keeps_answering_while_a_job_scans_a_big_folder(tmp_path, monkeypatch):
+    """A slow folder scan must not block other requests (it froze /health for a minute)."""
+    import time
+
+    from pcbridge_agent import jobs as jobs_mod
+
+    real = jobs_mod.snapshot
+
+    def slow_snapshot(folder):
+        time.sleep(1.0)
+        return real(folder)
+
+    monkeypatch.setattr(jobs_mod, "snapshot", slow_snapshot)
+
+    async def scenario():
+        q = JobQueue(tmp_path)
+        job = q.create("run", "x", [sys.executable, "-c", "print(1)"], tmp_path)
+        await q.submit(job)
+        t0 = time.perf_counter()
+        await asyncio.sleep(0.2)  # the job is inside its 1 s scan now
+        latency = time.perf_counter() - t0
+        for _ in range(200):
+            if job.state in ("done", "failed"):
+                break
+            await asyncio.sleep(0.05)
+        return latency, job.state
+
+    latency, state = asyncio.run(scenario())
+    assert state == "done"
+    assert latency < 0.6

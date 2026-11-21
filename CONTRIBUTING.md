@@ -66,4 +66,6 @@ Run the app with hot reload: `cd app && npx tauri dev`.
 ## Releasing (maintainers)
 
 1. Move the *Unreleased* changelog entries under the new version, and bump `version` in `app/package.json`, `app/src-tauri/tauri.conf.json` and the `Cargo.toml` files.
-2. Commit, then `git tag vX.Y.Z && git push --tags`. The release workflow builds and uploads both installers.
+2. Commit, then `git tag vX.Y.Z && git push --tags`. The release workflow builds and uploads both installers, the signed update files and `latest.json`. The installed apps pick the new version up by themselves.
+
+Automatic updates are signed. The release workflow needs two repository secrets: `TAURI_SIGNING_PRIVATE_KEY` (the contents of the private key made with `npx tauri signer generate`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The matching public key is in `app/src-tauri/tauri.conf.json` → `plugins.updater.pubkey`. **Keep a backup of the private key.** If it's lost, existing installs can't verify new updates and everyone has to reinstall by hand once. CI builds aren't signed (`app/src-tauri/tauri.ci.conf.json`).

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .cache import ResultCache, cache_key
 from .cleanup import cleanup_old
-from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path
+from .config import PathOutsideRoot, Settings, check_argv_paths, resolve_claude, safe_path, which
 from .gpu import query_gpus
 from .jobs import Job, JobQueue
 from .memory import memory_info
@@ -128,8 +128,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def daily():
             while True:
                 await asyncio.sleep(24 * 3600)
-                cleanup_old(root, settings.cleanup_days)
-                cache.enforce_cap()
+                await asyncio.to_thread(cleanup_old, root, settings.cleanup_days)
+                await asyncio.to_thread(cache.enforce_cap)
 
         task = asyncio.get_running_loop().create_task(daily())
         yield
@@ -182,13 +182,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     peer_memory: dict[str, Any] = {}
 
     def tools_present() -> dict[str, bool]:
-        found = {t: bool(shutil.which(t)) for t in TOOLS}
+        found = {t: bool(which(t)) for t in TOOLS}
         found["claude"] = bool(resolve_claude(settings.claude_cmd))
         return found
 
     @app.get("/status", dependencies=[Depends(auth)])
     async def status():
         running = [queue.jobs[j].summary() for j in queue.running if j in queue.jobs]
+        # Disk and PATH lookups run in a worker thread so the agent keeps answering meanwhile.
+        cache_bytes, mem, tools = await asyncio.to_thread(
+            lambda: (cache.size(), memory_info(), tools_present())
+        )
         return {
             "ok": True,
             "hostname": socket.gethostname(),
@@ -198,9 +202,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "waiting": len(queue.waiting),
             "running": running,
             "max_parallel_jobs": settings.max_parallel_jobs,
-            "cache_bytes": cache.size(),
-            "memory": await asyncio.to_thread(memory_info),
-            "tools": tools_present(),
+            "cache_bytes": cache_bytes,
+            "memory": mem,
+            "tools": tools,
             "devices": pairing.devices(),
             "peer_memory": peer_memory or None,
         }

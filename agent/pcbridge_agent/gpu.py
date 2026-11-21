@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
+
+from .config import which
 
 QUERY = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,driver_version"
 
@@ -43,7 +44,7 @@ def driver_is_recent(driver: str, minimum: float = 550.0) -> bool:
 
 
 def query_gpus(cmd: str = "nvidia-smi") -> dict:
-    exe = shutil.which(cmd) or cmd
+    exe = which(cmd) or cmd
     try:
         out = subprocess.run(
             [exe, f"--query-gpu={QUERY}", "--format=csv,noheader,nounits"],

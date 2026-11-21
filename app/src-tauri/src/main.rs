@@ -4,6 +4,7 @@
 mod mac;
 mod state;
 mod tray;
+mod updates;
 mod util;
 mod win;
 
@@ -61,6 +62,7 @@ fn run_gui(minimized: bool) {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
@@ -68,13 +70,14 @@ fn run_gui(minimized: bool) {
         .manage(app_state.clone())
         .setup(move |app| {
             tray::build(app.handle())?;
+            updates::spawn_auto_update(app.handle().clone());
             if minimized {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
                 }
             }
             if cfg!(windows) {
-                win::spawn_watchdog(app_state.clone());
+                win::spawn_watchdog(app.handle().clone(), app_state.clone());
             } else {
                 // Restart this Mac's private Syncthing if folders were shared before.
                 let st = app_state.clone();
@@ -83,6 +86,13 @@ fn run_gui(minimized: bool) {
                     if !cfg.shared_folders.is_empty() && !cfg.syncthing_api_key.is_empty() {
                         let _ = mac::ensure_local_syncthing(&st, &mut cfg);
                     }
+                });
+                // Keep Tailscale open and connected once this Mac is paired.
+                std::thread::spawn(|| loop {
+                    if !BridgeConfig::load().pc_host.is_empty() {
+                        let _ = mac::keep_tailscale_up();
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(60));
                 });
             }
             Ok(())
@@ -115,6 +125,8 @@ fn run_gui(minimized: bool) {
             mac::run_diagnostics_mac,
             win::win_get_state,
             win::win_save_state,
+            win::win_restart_helper,
+            updates::check_for_update,
             win::win_check_gpu,
             win::win_check_tool,
             win::win_install,

@@ -3,6 +3,36 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { api, errText, type BridgeConfig, type Platform, type WinState } from "../lib/api";
 import { Card, CopyBox } from "../components/ui";
 
+function UpdatesCard() {
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    setMsg("Checking…");
+    try {
+      const r = await api.checkForUpdate(false);
+      if (!r.available) {
+        setMsg(`✅ You have the latest version (${r.current}).`);
+      } else {
+        setMsg(`Installing version ${r.version}… PC Bridge will restart by itself.`);
+        const done = await api.checkForUpdate(true);
+        if (done.waiting) setMsg(`Version ${done.version} is ready. It installs as soon as the current PC job finishes.`);
+      }
+    } catch (e) {
+      setMsg(`❌ ${errText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Updates">
+      <p>PC Bridge updates itself: it checks a few minutes after it starts and then every 6 hours, installs the new version and restarts. Every update is signed, so only real PC Bridge releases are installed.</p>
+      <button className="btn" disabled={busy} onClick={check}>Check for updates now</button>
+      {msg && <p className="muted small">{msg}</p>}
+    </Card>
+  );
+}
+
 function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
   const [cfg, setCfg] = useState<BridgeConfig | null>(null);
   const [msg, setMsg] = useState("");
@@ -58,6 +88,7 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
           <button className="btn ghost" onClick={() => api.claudeUninstall().then(() => setMsg("Removed PC Bridge from Claude, CLAUDE.md and your PATH."))}>Disconnect from Claude</button>
         </div>
       </Card>
+      <UpdatesCard />
       {msg && <p className="toast">{msg}</p>}
     </div>
   );
@@ -66,6 +97,7 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
 function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
   const [ws, setWs] = useState<WinState | null>(null);
   const [auto, setAuto] = useState(true);
+  const [helper, setHelper] = useState("");
   useEffect(() => {
     api.winGetState().then(setWs);
   }, []);
@@ -85,6 +117,26 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
           <button className="btn ghost" onClick={() => openPath(`${ws.root}\\logs`)}>Open logs</button>
         </div>
         <p className="muted small">Job folders older than 14 days are deleted automatically (change “cleanup_days” in {ws.root}\config\settings.json).</p>
+      </Card>
+      <UpdatesCard />
+      <Card title="Helper">
+        <p>The helper is the background program your Mac talks to. Restart it if something you just installed (like FFmpeg) still shows as missing.</p>
+        <button
+          className="btn"
+          disabled={helper === "Restarting…"}
+          onClick={async () => {
+            setHelper("Restarting…");
+            try {
+              const r = await api.winRestartHelper();
+              setHelper(`✅ Helper running (version ${r.version})`);
+            } catch (e) {
+              setHelper(`❌ ${errText(e)}`);
+            }
+          }}
+        >
+          Restart the helper
+        </button>
+        {helper && <p className="muted small">{helper}</p>}
       </Card>
       <Card title="Pairing">
         <button className="btn" onClick={onRerunSetup}>Show a pairing code / run setup again</button>

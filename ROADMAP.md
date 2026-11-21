@@ -35,6 +35,7 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 | 5 | CI (tests + lint, macOS + Windows) and release workflow (DMG + Setup.exe) | ✅ | Windows CI caught 2 path-separator bugs, both fixed |
 | 6 | Docs: README, GUIDE.md (beginner), unsigned-app instructions | ✅ | |
 | 7 | GitHub repo, first release, CI green | ✅ | Public repo, v0.1.0 release with `PC Bridge.dmg` + `PC Bridge Setup.exe` |
+| 8 | **v0.1.2 hardening from the first real run**: signed auto-updates, self-updating PC helper, fresh PATH for jobs, helper starts without Finish, Tailscale kept connected | ✅ | Found by the first real Windows + Mac run |
 
 ## Detailed checklist
 
@@ -84,6 +85,17 @@ One Rust binary (`pc-bridge`) = desktop app + MCP server + shim runner. Shared l
 - [x] Open-source docs: README, USAGE, ARCHITECTURE (diagrams), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, issue/PR templates, Dependabot
 - [x] Public visibility + tag v0.1.0 → installers on the release page
 
+### Phase 8 — v0.1.2 hardening
+- [x] Tauri updater: signed `latest.json` on every release, background check (2 min after start, then every 6 h), Settings → Check for updates; the PC waits for running jobs
+- [x] Windows app compares the running helper's version with the bundled one at start, stops an old or orphaned helper (port 8765), reinstalls and restarts it
+- [x] Agent looks programs up in the registry's current PATH (+ WinGet Links, `~/.local/bin`) for every job and status
+- [x] Helper starts whenever it's installed (not only after the wizard's Finish)
+- [x] Tailscale watchdog on both computers (open app / reconnect; never touches sign-in); Windows unattended mode
+- [x] Settings → Restart the helper (Windows)
+- [x] Output detection off the event loop (scandir in a worker thread, skips `node_modules`/`.git`/Syncthing temp files, mtime ≥ job start); output copy, cache, cleanup and `/status` lookups in threads; test proves `/health` stays fast during a job
+- [x] Mac never re-runs a job locally once the PC accepted it (pull failures and dropped streams become warnings)
+- [x] Inline code after `-Command`, `-e`, `-c`, `/c` and code-looking arguments are never treated as paths
+
 ## What's next (after v0.1)
 
 ```mermaid
@@ -97,7 +109,6 @@ timeline
 | Version | Item | Why |
 |---|---|---|
 | 0.2 | Live progress (percent / ETA) for ffmpeg and ComfyUI jobs in the menu bar | Long encodes currently show only "running" |
-| 0.2 | Auto-update (Tauri updater) | Beginners shouldn't need to re-download installers |
 | 0.2 | Code signing + notarisation | Removes the "unidentified developer" / SmartScreen steps |
 | 0.2 | Send whole project folders for Node/Docker without a separate `npm ci` on the PC | Removes a known limitation |
 | 0.3 | Several PCs, choose by free VRAM | Households/studios with more than one GPU box |
@@ -114,10 +125,15 @@ timeline
 - **2026-11-21** macOS Tailscale CLI is the app binary; started from a GUI app (no TTY) it tries to open its GUI → always set `TAILSCALE_BE_CLI=1` (found by the first real user run). Added `pc-bridge doctor` to check this without the window.
 - **2026-11-21** (v0.1.1) Claude Code's native Windows installer leaves `claude.exe` in `%USERPROFILE%\.local\bin` off PATH → app finds it, adds it to the *user* PATH via the registry (keeps `%VARS%`, no admin), and passes the full path to the agent; the agent also falls back to `~/.local/bin`. Found by the first real Windows run.
 - **2026-11-21** Open-sourced under MIT with full contributor docs.
+- **2026-11-21** (v0.1.2) A long-running agent's PATH goes stale after winget installs → the agent re-reads PATH from the registry for each job (and resolves the program itself, because Windows ignores the child's PATH when finding the executable). Found when the first test encode failed with code 127.
+- **2026-11-21** (v0.1.2) App updates leave the old helper process running → the app checks `/health` version at start and replaces the helper. Auto-update moved forward from 0.2 at the user's request; the update signing key lives in `~/.tauri/` on the maintainer's Mac and in two repo secrets.
+- **2026-11-21** (v0.1.2) The agent froze for over a minute per job on a big shared folder (synchronous `rglob` before/after each job, on the event loop) → tray flicker + broken speed test. All disk walks now run in threads, and the GPU slot is held until outputs are collected so jobs never mix files. Found on the first real run with a large shared folder.
+- **2026-11-21** (v0.1.2) Tailscale is a hard dependency → both apps keep it open and connected, but never sign in or out for the user.
 - **2026-11-21** Windows app launches the agent as a child process (autostart with Windows) instead of a Windows Service → no admin rights needed day-to-day.
 
 ## Known limitations
 - Files a job opens **without naming them on the command line** (e.g. a script reading `data.csv` internally) reach the PC only through Syncthing; files named in the command are pushed automatically if missing.
+- Output detection scans at most 200,000 files in the job's folder; run jobs from a project sub-folder rather than a huge parent folder for best results.
 - Wake-on-LAN works only when the Mac is on the same home network as the PC (Tailscale can't carry the wake signal).
 - Node/Docker offload needs the project's dependencies installed on the PC side (Windows `node_modules` are not synced from the Mac).
 - The apps are **not code-signed**: macOS Gatekeeper and Windows SmartScreen warn on first open (one-time bypass in `docs/GUIDE.md`).

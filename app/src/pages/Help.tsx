@@ -15,7 +15,7 @@ function Diagram() {
 
       <rect x="460" y="20" width="250" height="190" rx="14" className="box pc" />
       <text x="585" y="48" textAnchor="middle" className="h">Your PC — the muscle</text>
-      <text x="585" y="80" textAnchor="middle">RTX 3090 · 32 GB RAM</text>
+      <text x="585" y="80" textAnchor="middle">NVIDIA GPU · lots of RAM</text>
       <text x="585" y="104" textAnchor="middle" className="s">runs the heavy jobs</text>
       <text x="585" y="140" textAnchor="middle">📁 PCBridge\workspace</text>
       <text x="585" y="175" textAnchor="middle" className="s">only jobs sent here use</text>
@@ -36,7 +36,7 @@ function Diagram() {
 }
 
 const FAQ: [string, string][] = [
-  ["Does this make my Mac use the PC's memory?", "No. Apps open on your Mac — the browser, editors, Claude itself — always use the Mac's own memory (RAM). Only jobs that PC Bridge sends to the PC use the PC's 32 GB of memory and its graphics card. That's why sending big jobs away frees up your Mac: they simply don't run there."],
+  ["Does this make my Mac use the PC's memory?", "No. Apps open on your Mac — the browser, editors, Claude itself — always use the Mac's own memory (RAM). Only jobs that PC Bridge sends to the PC use the PC's memory and its graphics card. That's why sending big jobs away frees up your Mac: they simply don't run there."],
   ["Which jobs go to the PC?", "Video encodes and renders, AI image/video generation, AI models, long GPU Python jobs — and memory-hungry work like big data processing (pandas/numpy), Docker containers, and large npm/Next.js builds and test suites. Quick things (small scripts, git, editing files) stay on the Mac because sending them would be slower."],
   ["What happens when my Mac is low on memory?", "PC Bridge watches your Mac's memory pressure. When it gets high — or a job is estimated to need more memory than the Mac has free — heavy jobs go to the PC automatically, so your Mac doesn't slow down."],
   ["What if the PC is off or asleep?", "PC Bridge tries to wake it (Wake-on-LAN, when you're on the same home network). If it still can't reach it, the job runs on your Mac instead and you get a notification. Nothing gets stuck."],

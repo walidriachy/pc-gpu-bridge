@@ -115,6 +115,63 @@ pub fn tailscale_status() -> Value {
     })
 }
 
+/// What to do so Tailscale stays connected (PC Bridge can't reach the PC without it).
+#[derive(Debug, PartialEq)]
+pub enum TailscaleFix {
+    Nothing,
+    /// The Tailscale app/service isn't answering: open it.
+    OpenApp,
+    /// Tailscale is open but disconnected ("Stopped"): connect again.
+    Connect,
+}
+
+/// A signed-out Tailscale (`NeedsLogin`) is left alone: only the user can sign in.
+pub fn tailscale_fix(backend_state: Option<&str>, unreadable: bool) -> TailscaleFix {
+    if unreadable {
+        return TailscaleFix::OpenApp;
+    }
+    match backend_state {
+        Some("Stopped") => TailscaleFix::Connect,
+        _ => TailscaleFix::Nothing,
+    }
+}
+
+/// Keep Tailscale running and connected. Called every minute by the background watcher.
+pub fn keep_tailscale_up() -> TailscaleFix {
+    let Some(bin) = tailscale_bin() else {
+        return TailscaleFix::Nothing;
+    };
+    let out = tailscale_cli(&bin, &["status", "--json"]);
+    let v: Value = serde_json::from_str(&out.stdout).unwrap_or(Value::Null);
+    let fix = tailscale_fix(v["BackendState"].as_str(), v.is_null());
+    match fix {
+        TailscaleFix::OpenApp => {
+            if cfg!(target_os = "macos") {
+                let _ = run("open", &["-g", "-a", "Tailscale"]);
+            } else if cfg!(windows) {
+                let gui = r"C:\Program Files\Tailscale\tailscale-ipn.exe";
+                if Path::new(gui).exists() {
+                    let _ = crate::util::command(gui).spawn();
+                }
+            }
+        }
+        TailscaleFix::Connect => {
+            let _ = tailscale_cli(&bin, &["up"]);
+        }
+        TailscaleFix::Nothing => {}
+    }
+    fix
+}
+
+/// Windows: keep Tailscale connected even when nobody is signed in to Windows (best effort).
+pub fn tailscale_unattended() {
+    if cfg!(windows) {
+        if let Some(bin) = tailscale_bin() {
+            let _ = tailscale_cli(&bin, &["set", "--unattended=true"]);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn tailscale_check() -> Result<Value, String> {
     blocking(|| Ok(tailscale_status())).await
@@ -533,4 +590,18 @@ pub async fn run_diagnostics_mac() -> Result<Vec<Value>, String> {
         Ok(out)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_tailscale_connected_but_never_signs_in() {
+        assert_eq!(tailscale_fix(None, true), TailscaleFix::OpenApp);
+        assert_eq!(tailscale_fix(Some("Stopped"), false), TailscaleFix::Connect);
+        assert_eq!(tailscale_fix(Some("Running"), false), TailscaleFix::Nothing);
+        assert_eq!(tailscale_fix(Some("NeedsLogin"), false), TailscaleFix::Nothing);
+        assert_eq!(tailscale_fix(Some("Starting"), false), TailscaleFix::Nothing);
+    }
 }

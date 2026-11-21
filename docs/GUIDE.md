@@ -107,7 +107,7 @@ Some PCs also need a switch turned on in the **BIOS**, the settings screen that 
 ### Memory (RAM): what PC Bridge does and doesn't do
 
 * PC Bridge **does not add memory to your Mac**. Apps open on your Mac (your browser, editors, Claude itself) always use the **Mac's own memory**.
-* What it does is **move heavy jobs away** from the Mac. Jobs sent to the PC use the **PC's 32 GB** and its graphics card.
+* What it does is **move heavy jobs away** from the Mac. Jobs sent to the PC use the **PC's memory** and its graphics card.
 * It watches how full your Mac's memory is. When the Mac is under pressure, or a job looks like it needs a lot of memory (big pandas/numpy work, Docker, large builds, local AI models), the job goes to the PC.
 * The **Status** tab shows Mac and PC free memory side by side, in both apps.
 
@@ -131,6 +131,10 @@ Start with **Help → Run diagnostics**. It checks every part and tells you, in 
 |---|---|
 | Mac says "Can't reach PC Bridge" | Is the PC on, with PC Bridge running (dot in the tray, near the clock)? Is Tailscale connected on **both** computers with the **same account**? |
 | Step 5 says Claude Code "didn't finish" and mentions `.local\bin is not in your PATH` | Update to PC Bridge **0.1.1 or newer** and click **Check again**. It finds Claude Code and fixes PATH for you. You don't need to edit Environment Variables yourself |
+| Mac test encode fails with "program not found on the PC: ffmpeg" (code 127) | Update both apps to **0.1.2 or newer**. Until then, restart the PC once. The helper now sees programs installed after it started |
+| PC Bridge is red after restarting the PC, and diagnostics say the agent and folder syncing aren't running | Update to **0.1.2 or newer**. With older versions, open PC Bridge on the PC and click **Finish** at the end of the setup wizard |
+| The PC dot keeps flickering red/green, or the speed check says "request or response body error" | Update both apps to **0.1.2 or newer**. Older helpers froze while a job scanned a big shared folder |
+| Something you just installed on the PC still shows as missing | On the PC: **Settings → Restart the helper** |
 | Pairing code rejected | Codes expire after 15 minutes and allow 5 tries. On the PC, click **Get a new code** |
 | Results don't appear on the Mac | Wait a few seconds; big files take time to sync. Check the file is inside a folder you shared in wizard step 4 |
 | PC doesn't wake up | Wake-on-LAN only works when the Mac is on the **same home network** as the PC. Check the BIOS setting (Part 3) |
@@ -138,6 +142,12 @@ Start with **Help → Run diagnostics**. It checks every part and tells you, in 
 | "Windows protected your PC" / "Apple cannot check it" | See Part 2 |
 | Want to undo everything on the Mac | **Settings → Disconnect from Claude**. This removes the Claude tools, the CLAUDE.md note and the PATH entry. A `.pcbridge-backup` copy of each file from before the change is kept next to it |
 | Want to remove it from the PC | Windows **Settings → Apps → PC Bridge → Uninstall**, then delete the `PCBridge` folder if you don't need the job outputs |
+
+## Updates
+
+From version 0.1.2, PC Bridge **updates itself** on both computers. A couple of minutes after it starts, and then every 6 hours, it looks for a new version, installs it and restarts. The PC waits until a running job is finished. To check right away, go to **Settings → Check for updates now**. Updates are signed, so PC Bridge only installs real releases.
+
+If you have 0.1.0 or 0.1.1, download and install 0.1.2 once on each computer (Part 1). After that you never need to download it again.
 
 ## What PC Bridge changes on each computer
 

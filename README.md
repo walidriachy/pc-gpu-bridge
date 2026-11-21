@@ -21,7 +21,7 @@
 
 ---
 
-You work with Claude on your MacBook. Your desktop PC has an RTX graphics card and 32 GB of RAM that sit idle. **PC Bridge connects them.** When Claude (or you, in Terminal) starts something heavy, such as a video encode, AI image generation, a GPU Python script, an 8 GB pandas job, a Docker build or a big Next.js test suite, PC Bridge works out whether the PC will finish it sooner. If so, it runs the job there and puts the result back in the folder you're working in. If the PC is off, it wakes it. If it can't reach it, the job runs on the Mac as normal and nothing gets stuck.
+You work with Claude on your MacBook. Your desktop PC has an RTX graphics card and plenty of RAM that sit idle. **PC Bridge connects them.** When Claude (or you, in Terminal) starts something heavy, such as a video encode, AI image generation, a GPU Python script, an 8 GB pandas job, a Docker build or a big Next.js test suite, PC Bridge works out whether the PC will finish it sooner. If so, it runs the job there and puts the result back in the folder you're working in. If the PC is off, it wakes it. If it can't reach it, the job runs on the Mac as normal and nothing gets stuck.
 
 It's two desktop apps built from one codebase:
 
@@ -48,7 +48,7 @@ Both have step-by-step setup wizards, so **you don't need Terminal.**
 | | |
 |---|---|
 | 🧠 **Smart router** | Compares the estimated Mac time against the PC time, counting file transfer, queue and wake-up. It learns from every job (SQLite history) |
-| 🧮 **Memory-aware** | Watches Mac memory pressure. RAM-heavy jobs, and any heavy job while the Mac is short on memory, go to the PC's 32 GB. Both apps show Mac and PC free RAM side by side |
+| 🧮 **Memory-aware** | Watches Mac memory pressure. RAM-heavy jobs, and any heavy job while the Mac is short on memory, go to the PC's memory. Both apps show Mac and PC free RAM side by side |
 | 🎬 **NVENC for free** | `libx264`/`libx265` are switched to `h264_nvenc`/`hevc_nvenc` when that's safe |
 | 🤖 **14 Claude tools (MCP)** | `pc_run`, `pc_run_task`, `pc_delegate_task`, `pc_docker`, `pc_node_build`, `pc_status`, `pc_gpu`, `pc_memory`, `pc_route_advice`, `pc_push_file`, `pc_pull_file`, `pc_wake`, `comfy_generate`, `ollama_chat` |
 | 🪄 **Transparent shims** | `ffmpeg`, `python`, `blender`… in `~/.pcbridge/bin` redirect on their own. `npm`/`pnpm`/`docker` only in projects that opt in |
@@ -71,7 +71,7 @@ flowchart LR
     S --> E
   end
   subgraph PC["🖥 Windows PC — the muscle"]
-    A["Agent :8765<br/>queue · cache · auth"] --> G["RTX GPU · 32 GB RAM"]
+    A["Agent :8765<br/>queue · cache · auth"] --> G["RTX GPU · PC RAM"]
     A --> W["Worker Claude"]
     A --> O["Ollama / ComfyUI"]
   end

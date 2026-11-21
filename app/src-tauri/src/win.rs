@@ -2,7 +2,7 @@
 //! power settings, pairing code. Compiled everywhere (so CI checks it), but most commands only do
 //! real work on Windows.
 
-use crate::mac::{check, tailscale_status};
+use crate::mac::{check, keep_tailscale_up, tailscale_status, tailscale_unattended};
 use crate::state::AppState;
 use crate::util::{blocking, command, powershell, random_key, run, which};
 use serde::{Deserialize, Serialize};
@@ -282,6 +282,11 @@ fn venv_python() -> PathBuf {
     root().join("config").join("venv").join("Scripts").join("python.exe")
 }
 
+/// The helper has been installed (wizard step 4 ran at least once).
+fn agent_installed() -> bool {
+    venv_python().exists()
+}
+
 #[tauri::command]
 pub async fn win_setup_agent(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let state = state.inner().clone();
@@ -292,22 +297,8 @@ pub async fn win_setup_agent(app: tauri::AppHandle, state: State<'_, AppState>) 
         for sub in ["workspace", "jobs", "worker", "cache", "models", "logs", "config"] {
             std::fs::create_dir_all(r.join(sub)).map_err(|e| format!("Couldn't create {}: {e}", r.display()))?;
         }
-        // Copy the bundled agent source into the PCBridge folder and install it into a private venv.
-        let src = r.join("config").join("agent-src");
-        let _ = std::fs::remove_dir_all(&src);
-        copy_dir(&resources, &src)?;
-        refresh_path();
-        if !venv_python().exists() {
-            let o = run("python", &["-m", "venv", &r.join("config").join("venv").display().to_string()]);
-            if !o.ok() {
-                return Err(format!("Couldn't prepare Python: {}", o.stderr));
-            }
-        }
-        let py = venv_python().display().to_string();
-        let o = run(&py, &["-m", "pip", "install", "--disable-pip-version-check", "-q", &src.display().to_string()]);
-        if !o.ok() {
-            return Err(format!("Couldn't install the PC Bridge agent: {}", o.stderr.lines().last().unwrap_or("")));
-        }
+        stop_agent(&state);
+        install_agent_files(&resources, &r)?;
         if ws.syncthing_api_key.is_empty() {
             ws.syncthing_api_key = random_key(32);
         }
@@ -326,6 +317,135 @@ pub async fn win_setup_agent(app: tauri::AppHandle, state: State<'_, AppState>) 
             std::thread::sleep(Duration::from_millis(700));
         }
         Err("The agent was installed but didn't start. Check PCBridge\\logs\\agent.log".into())
+    })
+    .await
+}
+
+/// `__version__` from a `pcbridge_agent/__init__.py`.
+pub fn parse_agent_version(init_py: &str) -> Option<String> {
+    init_py.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("__version__")?.trim_start().strip_prefix('=')?.trim();
+        let v = rest.trim_matches(|c| c == '"' || c == '\'');
+        (!v.is_empty()).then(|| v.to_string())
+    })
+}
+
+fn agent_stamp() -> PathBuf {
+    root().join("config").join("agent-version")
+}
+
+/// Copy the bundled agent source into the PCBridge folder and install it into the private venv.
+fn install_agent_files(resources: &Path, r: &Path) -> Result<(), String> {
+    let src = r.join("config").join("agent-src");
+    let _ = std::fs::remove_dir_all(&src);
+    copy_dir(resources, &src)?;
+    refresh_path();
+    if !venv_python().exists() {
+        let o = run("python", &["-m", "venv", &r.join("config").join("venv").display().to_string()]);
+        if !o.ok() {
+            return Err(format!("Couldn't prepare Python: {}", o.stderr));
+        }
+    }
+    let py = venv_python().display().to_string();
+    let o = run(
+        &py,
+        &["-m", "pip", "install", "--disable-pip-version-check", "-q", "--upgrade", &src.display().to_string()],
+    );
+    if !o.ok() {
+        return Err(format!("Couldn't install the PC Bridge agent: {}", o.stderr.lines().last().unwrap_or("")));
+    }
+    if let Some(v) = std::fs::read_to_string(resources.join("pcbridge_agent").join("__init__.py"))
+        .ok()
+        .and_then(|t| parse_agent_version(&t))
+    {
+        let _ = std::fs::write(r.join("config").join("agent-version"), v);
+    }
+    Ok(())
+}
+
+/// Version the agent on this PC answers with, if one is running.
+fn running_agent_version() -> Option<String> {
+    let c = bridge_core::client::AgentClient::new("http://127.0.0.1:8765", None);
+    c.health().ok()?["version"].as_str().map(str::to_string)
+}
+
+/// Stops whichever PC Bridge agent is listening on port 8765, including one left running by an
+/// older copy of the app (an update replaces the app but its helper process keeps running).
+const STOP_AGENT_PS: &str = r#"
+$c = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+foreach ($id in ($c.OwningProcess | Sort-Object -Unique)) {
+  $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+  if ($p -and $p.ProcessName -like 'python*') { Stop-Process -Id $id -Force }
+}
+"#;
+
+fn stop_agent(state: &AppState) {
+    if let Some(mut c) = state.procs.lock().unwrap().agent.take() {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    if cfg!(windows) {
+        let _ = powershell(STOP_AGENT_PS);
+        for _ in 0..20 {
+            if running_agent_version().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+}
+
+/// What to do at start-up about the installed agent.
+#[derive(Debug, PartialEq)]
+pub enum AgentAction {
+    Nothing,
+    Reinstall,
+}
+
+pub fn agent_action(bundled: &str, running: Option<&str>, stamp: Option<&str>) -> AgentAction {
+    match running.or(stamp) {
+        Some(v) if v == bundled => AgentAction::Nothing,
+        _ => AgentAction::Reinstall,
+    }
+}
+
+/// After an app update: if the helper is older than the one bundled with this app, stop it,
+/// install the new one and start it again. Runs once at start-up, before the watchdog.
+pub fn ensure_agent_current(app: &tauri::AppHandle, state: &AppState) -> Result<bool, String> {
+    if !cfg!(windows) || !agent_installed() {
+        return Ok(false);
+    }
+    let resources = app.path().resource_dir().map_err(|e| e.to_string())?.join("agent");
+    let bundled = std::fs::read_to_string(resources.join("pcbridge_agent").join("__init__.py"))
+        .ok()
+        .and_then(|t| parse_agent_version(&t))
+        .ok_or("The bundled helper is missing")?;
+    let running = running_agent_version();
+    let stamp = std::fs::read_to_string(agent_stamp()).ok().map(|s| s.trim().to_string());
+    if agent_action(&bundled, running.as_deref(), stamp.as_deref()) == AgentAction::Nothing {
+        return Ok(false);
+    }
+    stop_agent(state);
+    install_agent_files(&resources, &root())?;
+    start_services(state)?;
+    Ok(true)
+}
+
+/// Settings → "Restart the helper": stop it and start it again (also picks up new programs).
+#[tauri::command]
+pub async fn win_restart_helper(state: State<'_, AppState>) -> Result<Value, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        stop_agent(&state);
+        refresh_path();
+        start_services(&state)?;
+        for _ in 0..30 {
+            if let Some(v) = running_agent_version() {
+                return Ok(json!({"ok": true, "version": v}));
+            }
+            std::thread::sleep(Duration::from_millis(700));
+        }
+        Err("The helper didn't start again. Check PCBridge\\logs\\agent.log".into())
     })
     .await
 }
@@ -351,6 +471,7 @@ pub fn start_services(state: &AppState) -> Result<(), String> {
     let alive =
         |c: &mut Option<std::process::Child>| c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
     if !alive(&mut procs.agent) && venv_python().exists() {
+        refresh_path();
         let child = command(&venv_python().display().to_string())
             .args(["-m", "pcbridge_agent", "--root", &ws.root])
             .spawn()
@@ -376,12 +497,27 @@ pub fn start_services(state: &AppState) -> Result<(), String> {
 }
 
 /// Background watchdog: keep services running (Windows only, after setup).
-pub fn spawn_watchdog(state: AppState) {
-    std::thread::spawn(move || loop {
-        if cfg!(windows) && load_state().setup_complete {
-            let _ = start_services(&state);
+pub fn spawn_watchdog(app: tauri::AppHandle, state: AppState) {
+    std::thread::spawn(move || {
+        if !cfg!(windows) {
+            return;
         }
-        std::thread::sleep(Duration::from_secs(15));
+        if let Err(e) = ensure_agent_current(&app, &state) {
+            eprintln!("PC Bridge: couldn't update the helper: {e}");
+        }
+        tailscale_unattended();
+        let mut tick: u64 = 0;
+        loop {
+            // Start the helper whenever it's installed, even if the wizard was never closed with Finish.
+            if agent_installed() {
+                let _ = start_services(&state);
+            }
+            if tick.is_multiple_of(4) {
+                let _ = keep_tailscale_up();
+            }
+            tick += 1;
+            std::thread::sleep(Duration::from_secs(15));
+        }
     });
 }
 
@@ -560,6 +696,26 @@ pub async fn run_diagnostics_win(app: tauri::AppHandle) -> Result<Vec<Value>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_agent_version_from_init_py() {
+        let init = "\"\"\"PC Bridge agent.\"\"\"\n\n__version__ = \"0.1.2\"\n";
+        assert_eq!(parse_agent_version(init).as_deref(), Some("0.1.2"));
+        assert_eq!(parse_agent_version("__version__='1.0'").as_deref(), Some("1.0"));
+        assert_eq!(parse_agent_version("nothing here"), None);
+    }
+
+    #[test]
+    fn reinstalls_the_helper_only_when_it_is_out_of_date() {
+        // An old helper is still running after an app update.
+        assert_eq!(agent_action("0.1.2", Some("0.1.0"), Some("0.1.0")), AgentAction::Reinstall);
+        // Up to date and running.
+        assert_eq!(agent_action("0.1.2", Some("0.1.2"), None), AgentAction::Nothing);
+        // Not running yet, but the installed copy is current: let the watchdog just start it.
+        assert_eq!(agent_action("0.1.2", None, Some("0.1.2")), AgentAction::Nothing);
+        // Not running and never stamped (installed by 0.1.1 or older).
+        assert_eq!(agent_action("0.1.2", None, None), AgentAction::Reinstall);
+    }
 
     #[test]
     fn user_path_script_quotes_user_names_with_spaces_and_apostrophes() {

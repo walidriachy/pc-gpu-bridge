@@ -23,14 +23,10 @@ jobs:
         include:
           - os: macos-latest # Apple Silicon (M1/M2/M3…)
             name: Mac installer (PC Bridge.dmg)
-            bundles: dmg
-            pattern: target/release/bundle/dmg/*.dmg
-            asset: PC Bridge.dmg
+            bundles: app,dmg
           - os: windows-latest
             name: Windows installer (PC Bridge Setup.exe)
             bundles: nsis
-            pattern: target/release/bundle/nsis/*.exe
-            asset: PC Bridge Setup.exe
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
@@ -45,19 +41,33 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build
+      - name: Build (signed for automatic updates)
         working-directory: app
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so updates can't be signed. See CONTRIBUTING.md → Releasing."
+            exit 1
+          fi
           npm ci
           npx tauri build --bundles ${{ matrix.bundles }}
-      - name: Rename installer
+      - name: Collect files
         shell: bash
         run: |
           set -euo pipefail
-          src=$(ls ${{ matrix.pattern }} | head -n1)
           mkdir -p out
-          cp "$src" "out/${{ matrix.asset }}"
+          B=target/release/bundle
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "$(ls $B/dmg/*.dmg | head -n1)" "out/PC Bridge.dmg"
+            cp "$(ls $B/macos/*.app.tar.gz | head -n1)" out/PC.Bridge.app.tar.gz
+            cp "$(ls $B/macos/*.app.tar.gz.sig | head -n1)" out/PC.Bridge.app.tar.gz.sig
+          else
+            cp "$(ls $B/nsis/*-setup.exe | head -n1)" "out/PC Bridge Setup.exe"
+            cp "$(ls $B/nsis/*-setup.exe.sig | head -n1)" out/PC.Bridge.Setup.exe.sig
+          fi
           ls -la out
       - name: Create release (if needed) and upload
         shell: bash
@@ -66,4 +76,26 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "PC Bridge $TAG" --notes-file .github/release-notes.md || true
           # GitHub turns spaces in asset file names into dots; the label keeps the readable name.
-          gh release upload "$TAG" "out/${{ matrix.asset }}#${{ matrix.asset }}" --clobber
+          for f in out/*; do
+            name=$(basename "$f")
+            gh release upload "$TAG" "$f#$name" --clobber
+          done
+
+  updater-manifest:
+    name: Publish latest.json (automatic updates)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build and upload latest.json
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern '*.sig' --dir sigs --clobber
+          python3 .github/scripts/make_latest_json.py "$TAG" "$GITHUB_REPOSITORY" sigs > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber

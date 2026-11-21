@@ -23,7 +23,7 @@ Once you've connected Claude (Mac wizard, step 5), you don't need to do anything
 | "Generate product shots with my ComfyUI workflow" | `comfy_generate` queues the workflow on ComfyUI on the PC (if installed) |
 | "Ask the local Llama 70B to summarise this report" | `ollama_chat` runs on the PC. Models stay loaded, and the least recently used one is unloaded when another needs the VRAM |
 | "Run the full test suite / build the Next.js app" | Goes to the PC if that project has opted in (see below) |
-| "Process this 8 GB CSV with pandas" | RAM-heavy, so it goes to the PC's 32 GB if the Mac can't comfortably hold it |
+| "Process this 8 GB CSV with pandas" | RAM-heavy, so it goes to the PC's memory if the Mac can't comfortably hold it |
 | "Take this whole folder and caption every image" | `pc_delegate_task` hands the task to the worker Claude next to the GPU |
 | "Is my PC on? How busy is the GPU?" | `pc_status`, `pc_gpu`, `pc_memory` |
 
@@ -100,12 +100,14 @@ Add one comment anywhere in a script to override the automatic classification:
 |---|---|
 | Status | PC online or asleep, **Mac vs PC free RAM side by side**, GPU load and VRAM, running job, the "Send heavy jobs to the PC" switch, Wake PC |
 | Jobs | Every PC job with Open output / Folder / Cancel, and routing history (where each command ran and how long it took) |
-| Settings | Notifications, re-pair or unpair, shared folders, npm/pnpm/Docker opt-in help, Connect or Disconnect Claude |
+| Settings | Notifications, re-pair or unpair, shared folders, npm/pnpm/Docker opt-in help, Connect or Disconnect Claude, **Check for updates now** |
 | Help | How it works, RAM explanation, FAQ, security, **Run diagnostics** |
 
 The menu bar menu shows the status, GPU, free RAM and the current job, plus Pause redirecting, Open job folder, Open PC Bridge and Quit.
 
-**Windows (tray dot + window):** the same four screens. Status shows this PC and the last free RAM your Mac reported. Settings has Start with Windows, Open folder, Open logs and a new pairing code.
+**Windows (tray dot + window):** the same four screens. Status shows this PC and the last free RAM your Mac reported. Settings has Start with Windows, Open folder, Open logs, **Check for updates now**, **Restart the helper** and a new pairing code.
+
+**Both apps, in the background:** they install signed updates by themselves (2 minutes after start, then every 6 hours; the PC waits for a running job). Once paired, they keep Tailscale open and connected. The Windows app also replaces an outdated helper when it starts.
 
 ## Configuration reference
 

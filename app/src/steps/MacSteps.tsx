@@ -248,7 +248,7 @@ function DoneStep({ setDone }: StepCtx) {
         <li><strong>Just ask Claude.</strong> “Encode this video”, “generate 4 images”, “run the test suite” — Claude sends heavy work to the PC by itself.</li>
         <li><strong>Watch the menu bar dot:</strong> 🟢 PC ready · 🟡 PC asleep (it will be woken) · 🔴 not connected.</li>
         <li><strong>Results come back by themselves</strong> into the same folder, usually within seconds of the job finishing.</li>
-        <li><strong>Memory-smart:</strong> when your Mac is short on memory, or a job needs lots of it, PC Bridge sends it to the PC's 32 GB. Apps you have open on the Mac still use the Mac's memory.</li>
+        <li><strong>Memory-smart:</strong> when your Mac is short on memory, or a job needs lots of it, PC Bridge sends it to the PC's memory. Apps you have open on the Mac still use the Mac's memory.</li>
         <li><strong>Never stuck:</strong> if the PC can't be reached, jobs run on the Mac instead and you get a notification. Use “Pause redirecting” in the menu bar any time.</li>
       </ol>
     </div>

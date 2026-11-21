@@ -84,6 +84,9 @@ export const api = {
   winConfigureWol: () => invoke<{ adapter: string; mac: string }>("win_configure_wol"),
   winPower: () => invoke<any>("win_power"),
   winSetAutostart: (enabled: boolean) => invoke<void>("win_set_autostart", { enabled }),
+  checkForUpdate: (install: boolean) =>
+    invoke<{ available: boolean; current: string; version?: string; waiting?: string }>("check_for_update", { install }),
+  winRestartHelper: () => invoke<{ ok: boolean; version: string }>("win_restart_helper"),
   winStatus: () => invoke<any>("win_status"),
   diagnosticsWin: () => invoke<Check[]>("run_diagnostics_win"),
 };
