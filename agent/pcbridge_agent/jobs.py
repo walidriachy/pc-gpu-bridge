@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -19,6 +20,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TERMINAL = {"done", "failed", "cancelled"}
+
+
+def keep_awake(on: bool) -> None:
+    """Stop Windows from sleeping while jobs run; allow sleep again when idle."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    es_continuous, es_system_required = 0x80000000, 0x00000001
+    flags = es_continuous | (es_system_required if on else 0)
+    ctypes.windll.kernel32.SetThreadExecutionState(flags)  # type: ignore[attr-defined]
 
 
 def short_name(text: str) -> str:
@@ -155,6 +167,7 @@ class JobQueue:
                 if self.waiting and self.waiting[0] == job.id and len(self.running) < self.max_parallel:
                     self.waiting.pop(0)
                     self.running.add(job.id)
+                    keep_awake(True)
                     self.cond.notify_all()
                     return True
                 await self.cond.wait()
@@ -162,6 +175,8 @@ class JobQueue:
     async def _release(self, job: Job) -> None:
         async with self.cond:
             self.running.discard(job.id)
+            if not self.running:
+                keep_awake(False)
             self.cond.notify_all()
 
     async def _run(self, job: Job) -> None:

@@ -90,7 +90,7 @@ impl AgentClient {
         }
     }
 
-    fn get_json(&self, path: &str, timeout: u64) -> Result<Value> {
+    pub fn get_json(&self, path: &str, timeout: u64) -> Result<Value> {
         let r = self.req(reqwest::Method::GET, path).timeout(Duration::from_secs(timeout)).send().map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
@@ -118,6 +118,11 @@ impl AgentClient {
             .json(&json!({"code": code, "device_name": device_name}))
             .send()
             .map_err(map_err)?;
+        Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
+    }
+
+    pub fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let r = self.req(reqwest::Method::POST, path).timeout(Duration::from_secs(60)).json(body).send().map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
 

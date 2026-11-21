@@ -207,3 +207,47 @@ def test_job_detects_outputs(tmp_path):
         assert Path(j.folder / "job.json").exists()
 
     asyncio.run(main())
+
+
+# ---------------- syncthing ----------------
+
+
+def test_syncthing_calls(tmp_path):
+    import json as _json
+
+    from pcbridge_agent.syncthing import Syncthing, folder_id
+
+    calls = []
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener(req, timeout=10):
+        calls.append((req.get_method(), req.full_url, req.headers.get("X-api-key"),
+                      _json.loads(req.data) if req.data else None))
+        if req.full_url.endswith("/rest/system/status"):
+            return Resp(b'{"myID": "PC-ID"}')
+        return Resp(b"")
+
+    st = Syncthing("k", opener=opener)
+    assert st.device_id() == "PC-ID"
+    st.add_device("MAC-ID", "Mac")
+    st.share_folder(folder_id("My Videos"), "My Videos", tmp_path / "w" / "My Videos", ["MAC-ID", "PC-ID"])
+    assert (tmp_path / "w" / "My Videos").is_dir()
+    methods = [(c[0], c[1].split("8385")[1]) for c in calls]
+    assert ("PUT", "/rest/config/devices/MAC-ID") in methods
+    assert ("PUT", "/rest/config/folders/pcbridge-my-videos") in methods
+    assert any(m == "POST" and u.startswith("/rest/db/ignores") for m, u in methods)
+    assert all(c[2] == "k" for c in calls)
+    folder_body = next(c[3] for c in calls if "/config/folders/" in c[1])
+    assert {d["deviceID"] for d in folder_body["devices"]} == {"MAC-ID", "PC-ID"}
