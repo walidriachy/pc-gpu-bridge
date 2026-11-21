@@ -755,7 +755,7 @@ pub async fn run_diagnostics_win(app: tauri::AppHandle) -> Result<Vec<Value>, St
             "NVIDIA graphics card",
             smi.ok(),
             smi.stdout.trim().to_string(),
-            "Install the latest NVIDIA driver (Setup → step 2).",
+            "Install the latest NVIDIA driver (Settings → “Show a pairing code / run setup again” → “Check your graphics card”).",
         ));
         let ts = tailscale_status();
         out.push(check(
@@ -781,15 +781,15 @@ pub async fn run_diagnostics_win(app: tauri::AppHandle) -> Result<Vec<Value>, St
             "Folder syncing running",
             bridge_core::syncthing::Syncthing::new(ws.syncthing_api_key.clone()).alive(),
             "",
-            "Restart PC Bridge; make sure Syncthing is installed (Setup → install step).",
+            "Restart PC Bridge. If that doesn't help: Settings → “Show a pairing code / run setup again” → “Install the tools”.",
         ));
         out.push(check(
             "Wake-on-LAN set up",
             !ws.mac_address.is_empty(),
             ws.mac_address.clone(),
-            "Setup → Wake-on-LAN → “Do it for me”.",
+            "Settings → “Show a pairing code / run setup again” → “Wake-on-LAN” → “Do it for me”.",
         ));
-        out.push(check("Starts with Windows", autostart, "", "Settings → turn on “Start with Windows”."));
+        out.push(check("Starts with Windows", autostart, "", "Settings → Startup → turn on “Start PC Bridge with Windows”."));
         Ok(out)
     })
     .await

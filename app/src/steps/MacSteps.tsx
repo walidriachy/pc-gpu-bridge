@@ -88,7 +88,7 @@ function PairStep({ setDone }: StepCtx) {
       <ol>
         <li>On the PC, finish the PC Bridge setup until you see a big <strong>6-digit code</strong>.</li>
         <li>Choose your PC below (it's listed because it's on your Tailscale network).</li>
-        <li>Type the code and click <strong>Pair</strong>. PC Bridge swaps a secret key automatically and saves it in your Mac's Keychain — you never handle it.</li>
+        <li>Type the code and click <strong>Pair</strong>. PC Bridge swaps a secret key automatically and saves it privately on this Mac — you never handle it.</li>
       </ol>
       <label className="field">
         <span>Your PC</span>

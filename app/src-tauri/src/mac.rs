@@ -752,35 +752,40 @@ pub async fn run_diagnostics_mac() -> Result<Vec<Value>, String> {
         let home = user_home();
         let mut out = vec![];
         let ts = tailscale_status();
-        out.push(check("Tailscale installed", ts["installed"] == true, "", "Open the Setup again and use “Install Tailscale”."));
+        out.push(check("Tailscale installed", ts["installed"] == true, "", "Settings → “Run setup again” → “Connect your computers privately” → “Download Tailscale”."));
         out.push(check("Tailscale connected", ts["running"] == true, "", "Click the Tailscale icon in the menu bar and choose “Connect” / log in."));
-        out.push(check("Paired with a PC", cfg.is_paired(), cfg.pc_hostname.clone(), "Go to Settings → “Pair again” and enter the code shown on the PC."));
-        out.push(check("Pairing key saved on this Mac", secrets::get_token().is_some(), "", "Pair again — this saves a fresh key."));
+        out.push(check("Paired with a PC", cfg.is_paired(), cfg.pc_hostname.clone(), "Settings → “Run setup again” → “Pair with your PC”, then type the code shown on the PC."));
+        out.push(check("Pairing key saved on this Mac", secrets::get_token().is_some(), "", "Settings → “Run setup again” → “Pair with your PC” saves a fresh key."));
         let c = client(&cfg);
         let status = c.as_ref().map(|c| c.status());
         let reachable = matches!(status, Some(Ok(_)));
         out.push(check("PC reachable", reachable,
             match &status { Some(Err(e)) => e.to_string(), _ => String::new() },
-            "Make sure the PC is switched on, PC Bridge is running there (green icon by the clock), and Tailscale is connected on both computers. If the PC is asleep, press “Wake PC”."));
+            "Make sure the PC is switched on, PC Bridge is running there (green icon by the clock), and Tailscale is connected on both computers. If the PC is asleep, press “Wake PC” on the Status screen."));
         if let Some(Ok(s)) = &status {
             for t in ["ffmpeg", "claude"] {
-                out.push(check(&format!("PC has {t}"), s["tools"][t] == true, "", "On the PC, open PC Bridge → Setup and re-run the install step."));
+                let fix = if t == "ffmpeg" {
+                    "On the PC, open PC Bridge → Settings → Programs and click “Install” next to FFmpeg."
+                } else {
+                    "On the PC, open PC Bridge → Settings → “Show a pairing code / run setup again” and redo “Set up the worker Claude”."
+                };
+                out.push(check(&format!("PC has {t}"), s["tools"][t] == true, "", fix));
             }
             let gpu = c.as_ref().and_then(|c| c.gpu().ok()).unwrap_or(Value::Null);
             out.push(check("PC graphics card detected", gpu["available"] == true,
                 gpu["gpus"][0]["name"].as_str().unwrap_or("").to_string(),
-                "On the PC, install the latest NVIDIA driver (Setup → step 2)."));
+                "On the PC, install the latest NVIDIA driver (PC Bridge → Settings → “Show a pairing code / run setup again” → “Check your graphics card”)."));
         }
         let st = syncthing::Syncthing::new(cfg.syncthing_api_key.clone());
         out.push(check("Folder syncing running", !cfg.syncthing_api_key.is_empty() && st.alive(), "",
-            "Open Setup → “Choose folders” and click “Share these folders” again."));
+            "Settings → “Run setup again” → “Choose folders to share”, then click “Share these folders” again."));
         for f in &cfg.shared_folders {
             out.push(check(&format!("Shared folder “{}”", f.name), Path::new(&f.mac_path).is_dir(), f.mac_path.clone(),
-                "This folder was moved or deleted. Choose it again in Settings."));
+                "This folder was moved or deleted. Settings → “Run setup again” → “Choose folders to share”: remove it and add it again."));
         }
-        out.push(check("Claude Code connected", cc::mcp_installed(&cc::claude_code_config(&home)), "", "Settings → “Connect to Claude”."));
+        out.push(check("Claude Code connected", cc::mcp_installed(&cc::claude_code_config(&home)), "", "Settings → “Reconnect to Claude”."));
         let zshrc = std::fs::read_to_string(home.join(".zshrc")).unwrap_or_default();
-        out.push(check("Helper commands on PATH", zshrc.contains(cc::PATH_BEGIN), "", "Settings → “Connect to Claude” with helpers enabled, then open a new Terminal window."));
+        out.push(check("Helper commands on PATH", zshrc.contains(cc::PATH_BEGIN), "", "Settings → “Reconnect to Claude”, then open a new Terminal window."));
         let mem = memory::local_memory();
         out.push(check("Mac memory", mem.pressure != memory::Pressure::Critical,
             format!("{:.1} GB free, pressure {:?}", mem.available_bytes as f64 / (1u64 << 30) as f64, mem.pressure),
