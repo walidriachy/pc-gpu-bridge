@@ -4,6 +4,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-11-23
+
+### Fixed
+- **The folder copy to the PC was very slow.** Both computers rescanned the whole shared folder every minute, which on a big folder (100+ GB, about a million files) kept them re-checking files instead of copying new ones. Now they rescan once an hour (changes are still picked up as they happen). The PC also copies small files (code, scripts, settings) before big videos, and no longer forces every file to disk one at a time.
+- **The Mac's copy program restarts by itself.** If Syncthing stops on the Mac, PC Bridge starts it again within a minute (it used to stay stopped until the app was reopened). It now keeps a log at `~/.pcbridge/syncthing/syncthing.log`.
+
+### Changed
+- **Jobs never start with half their files.** Before a job runs on the PC, PC Bridge compares the job's folder with the PC and sends the files the PC doesn't have yet. If too much is missing (over 20,000 files or 4 GB), it says so plainly, with how far the folder copy is, and runs the job on the Mac instead.
+- **Node projects get their packages on the PC.** `node_modules` is never copied (Mac packages don't work on Windows), so the first time a Node job runs on the PC, PC Bridge installs the project's packages there, and again whenever its package list changes.
+- **Mac-only jobs stay on the Mac.** A command that uses Mac-only tools (`osascript`, `/Applications/…`, Homebrew paths …), or a script in a project that only has a Mac build of a program it uses (for example a `mac_arm` headless Chrome), runs on the Mac with the reason, instead of failing on the PC.
+- **A job that fails on the PC because something is missing there runs on the Mac.** When a PC job stops with "Cannot find module", "No module named …", "not recognized as a command" or similar, PC Bridge runs it again on the Mac and says why (unless you asked for the PC).
+- **See how far the folder copy is.** The Mac's status screen has a **Folder copy to the PC** card (percent, files and GB to go), and Claude has a new `pc_sync_status` tool.
+
 ## [0.1.7] — 2026-11-23
 
 ### Fixed
@@ -120,7 +133,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...v0.1.5

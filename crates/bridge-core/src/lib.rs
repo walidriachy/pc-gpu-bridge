@@ -8,6 +8,7 @@ pub mod mcp;
 pub mod memory;
 pub mod notify;
 pub mod paths;
+pub mod prepare;
 pub mod router;
 pub mod secrets;
 pub mod shim;

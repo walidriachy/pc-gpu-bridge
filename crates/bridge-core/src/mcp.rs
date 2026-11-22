@@ -127,6 +127,7 @@ fn annotations(name: &str) -> Option<(&'static str, bool, bool, bool)> {
         "pc_install" => ("Install a program on the PC", false, false, true),
         "pc_gpu" => ("PC graphics card", true, false, true),
         "pc_memory" => ("Mac and PC memory", true, false, true),
+        "pc_sync_status" => ("Folder copy to the PC", true, false, true),
         "pc_route_advice" => ("Where would this run?", true, false, true),
         "pc_push_file" => ("Copy a file to the PC", false, false, true),
         "pc_pull_file" => ("Copy a file from the PC", false, false, true),
@@ -175,6 +176,7 @@ fn tool_list() -> Value {
          "inputSchema": {"type": "object", "properties": {"program": {"type": "string", "description": "One of: ffmpeg, blender, pytorch, ollama, node, docker, git"}}, "required": ["program"]}},
         {"name": "pc_gpu", "description": "GPU usage, VRAM and temperature on the PC.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "pc_memory", "description": "Mac vs PC free RAM side by side, plus the Mac's memory pressure level.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "pc_sync_status", "description": "How far the copy of each shared folder to the PC is (percent, files and GB still to copy). Jobs send the few files the PC is missing themselves; check this when a job says its folder isn't fully copied yet.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "pc_route_advice", "description": "Ask the smart router whether a command would be faster on the Mac or the PC, without running it.",
          "inputSchema": {"type": "object", "properties": {"command": cmd, "cwd": cwd}, "required": ["command"]}},
         {"name": "pc_push_file", "description": "Copy a Mac file to the PC (into PCBridge\\workspace or a given relative path).",
@@ -387,6 +389,27 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
                 }
                 Err(e) => error(e.to_string()),
             }
+        }
+        "pc_sync_status" => {
+            let st = crate::syncthing::Syncthing::new(engine.cfg.syncthing_api_key.clone());
+            if engine.cfg.shared_folders.is_empty() {
+                return text("No folders are shared with the PC yet (PC Bridge → Settings → Shared folders).");
+            }
+            let mut msg = String::new();
+            for f in &engine.cfg.shared_folders {
+                msg.push_str(&match st.pc_progress(&f.name) {
+                    Some((pct, _, 0)) => format!("{}: fully copied to the PC ({pct:.0}%)\n", f.name),
+                    Some((pct, bytes, files)) => format!(
+                        "{}: {pct:.1}% copied to the PC; {files} files ({}) still to copy\n",
+                        f.name,
+                        crate::prepare::human_bytes(bytes)
+                    ),
+                    None => {
+                        format!("{}: can't tell: the folder copy isn't running on this Mac (open PC Bridge)\n", f.name)
+                    }
+                });
+            }
+            text(msg)
         }
         "pc_status" | "pc_memory" => {
             let mac = memory::local_memory();
@@ -663,12 +686,13 @@ mod tests {
             "pc_docker",
             "pc_node_build",
             "pc_memory",
+            "pc_sync_status",
             "pc_route_advice",
             "pc_install",
         ] {
             assert!(names.contains(&n), "missing {n}");
         }
-        assert_eq!(names.len(), 15, "{names:?}");
+        assert_eq!(names.len(), 16, "{names:?}");
         let install = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "pc_install").unwrap();
         let desc = install["description"].as_str().unwrap();
         assert!(desc.contains("ASK THE USER FIRST") && desc.contains("never in the shared folders"), "{desc}");

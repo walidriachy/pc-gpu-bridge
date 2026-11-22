@@ -102,6 +102,15 @@ fn run_gui(minimized: bool) {
                             let _ = mac::ensure_local_syncthing(&st, &mut cfg);
                         }
                     }
+                    // Keep it running: if Syncthing stops (it is big work on huge folders), the
+                    // copy to the PC silently stops too.
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        let mut cfg = BridgeConfig::load();
+                        if !cfg.shared_folders.is_empty() && !cfg.syncthing_api_key.is_empty() {
+                            let _ = mac::ensure_local_syncthing(&st, &mut cfg);
+                        }
+                    }
                 });
                 std::thread::spawn(mac::claim_device_once);
                 mac::after_update();

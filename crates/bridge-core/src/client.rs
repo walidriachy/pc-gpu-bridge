@@ -237,16 +237,43 @@ impl AgentClient {
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }
 
+    /// Which of these files (PC-relative path, size) the PC doesn't have yet. `Ok(None)` when the
+    /// PC's helper is older than 0.1.8 and can't tell.
+    pub fn check_files(&self, files: &[(String, u64)]) -> Result<Option<Vec<String>>> {
+        let mut missing = vec![];
+        for chunk in files.chunks(5000) {
+            let body = json!({"files": chunk.iter().map(|(p, s)| json!({"path": p, "size": s})).collect::<Vec<_>>()});
+            let r = self
+                .req(reqwest::Method::POST, "/files/check")
+                .timeout(Duration::from_secs(60))
+                .json(&body)
+                .send()
+                .map_err(map_err)?;
+            if matches!(r.status().as_u16(), 404 | 405) {
+                return Ok(None);
+            }
+            let v: Value = Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))?;
+            missing.extend(v["missing"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(String::from)));
+        }
+        Ok(Some(missing))
+    }
+
     /// Keep the PC awake for `minutes` more, even when idle (capped at 2 hours by the PC).
     pub fn keep_awake(&self, minutes: f64) -> Result<Value> {
         self.post_json("/keep-awake", &json!({"minutes": minutes}))
     }
 
     pub fn push_file(&self, local: &Path, rel: &str) -> Result<Value> {
-        let form = reqwest::blocking::multipart::Form::new()
-            .text("path", rel.to_string())
-            .file("file", local)
-            .map_err(|e| ClientError::Other(e.to_string()))?;
+        let mut form = reqwest::blocking::multipart::Form::new().text("path", rel.to_string());
+        // Keep the Mac's modified time on the PC copy (agents from 0.1.8; older ones ignore it).
+        if let Some(t) = std::fs::metadata(local)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        {
+            form = form.text("mtime", format!("{:.3}", t.as_secs_f64()));
+        }
+        let form = form.file("file", local).map_err(|e| ClientError::Other(e.to_string()))?;
         let r = self.req(reqwest::Method::POST, "/files/push").multipart(form).send().map_err(map_err)?;
         Self::check(r)?.json().map_err(|e| ClientError::Other(e.to_string()))
     }

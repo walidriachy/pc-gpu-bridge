@@ -320,3 +320,24 @@ def test_pair_claim_forget_and_remove_endpoints(env):
     # Unpairing from the Mac: its token stops working.
     assert c.post("/pair/forget").json() == {"forgotten": True}
     assert c.get("/status").status_code == 401
+
+
+def test_files_check_lists_missing_and_different(env):
+    c = env["client"]
+    c.post(
+        "/files/push",
+        data={"path": "workspace/p/a.txt", "mtime": "1700000000"},
+        files={"file": ("a", b"abc")},
+    )
+    r = c.post(
+        "/files/check",
+        json={"files": [
+            {"path": "workspace/p/a.txt", "size": 3},
+            {"path": "workspace/p/a.txt", "size": 4},
+            {"path": "workspace/p/b.txt", "size": 1},
+            {"path": "../outside.txt", "size": 1},
+        ]},
+    )  # fmt: skip
+    assert r.status_code == 200
+    assert r.json()["missing"] == ["workspace/p/a.txt", "workspace/p/b.txt"]
+    assert c.get("/files/stat", params={"path": "workspace/p/a.txt"}).json()["mtime"] == 1700000000

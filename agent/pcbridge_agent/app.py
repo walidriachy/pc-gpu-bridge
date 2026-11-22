@@ -42,6 +42,16 @@ COMFY_STOP_WAIT_S = 30.0  # after a timeout or cancel, how long to wait for Comf
 COMFY_UNANSWERED_S = 120.0
 
 
+class FileEntry(BaseModel):
+    path: str
+    size: int
+
+
+class FilesCheckRequest(BaseModel):
+    # Relative to the PC root, like every other path the Mac sends.
+    files: list[FileEntry] = Field(default_factory=list, max_length=200_000)
+
+
 class InstallRequest(BaseModel):
     program: str
     stream: bool = True
@@ -504,8 +514,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await queue.submit(job)
         return await _finish(job, req.stream)
 
+    @app.post("/files/check", dependencies=[Depends(auth)])
+    async def files_check(req: FilesCheckRequest):
+        """Which of these files the PC doesn't have yet (missing, or a different size)."""
+
+        def work():
+            missing = []
+            for f in req.files:
+                try:
+                    p = safe_path(root, f.path)
+                    if p.stat().st_size != f.size:
+                        missing.append(f.path)
+                except PathOutsideRoot:
+                    continue
+                except OSError:
+                    missing.append(f.path)
+            return {"missing": missing}
+
+        return await asyncio.to_thread(work)
+
     @app.post("/files/push", dependencies=[Depends(auth)])
-    async def files_push(path: str = Form(...), file: UploadFile = File(...)):
+    async def files_push(
+        path: str = Form(...), file: UploadFile = File(...), mtime: float | None = Form(None)
+    ):
         dest = safe_path(root, path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Write next to it under a name Syncthing ignores, then swap it in, so a half-sent file
@@ -515,6 +546,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with open(part, "wb") as f:
                 while chunk := await file.read(1 << 20):
                     f.write(chunk)
+            if mtime is not None:
+                # Keep the Mac's modified time, like Syncthing does, so the copy counts as in sync.
+                os.utime(part, (mtime, mtime))
             os.replace(part, dest)
         finally:
             part.unlink(missing_ok=True)

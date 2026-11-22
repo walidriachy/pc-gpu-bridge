@@ -26,6 +26,11 @@ DEFAULT_IGNORES = [
 VERSIONING = {"type": "trashcan", "params": {"cleanoutDays": "14"}}
 # Seconds Syncthing waits after a change before sending it (its default is 10).
 WATCH_DELAY_S = 2
+# Full rescans are only a safety net (the file watcher reports changes as they happen). Every
+# minute on a 100+ GB folder kept the PC re-checking files instead of copying new ones.
+RESCAN_S = 3600
+# Code and scripts (small) reach the PC before big videos, so jobs can start sooner.
+PULL_ORDER = "smallestFirst"
 
 
 class SyncthingError(RuntimeError):
@@ -81,7 +86,11 @@ class Syncthing:
                 "devices": [{"deviceID": d} for d in devices],
                 "fsWatcherEnabled": True,
                 "fsWatcherDelayS": WATCH_DELAY_S,
-                "rescanIntervalS": 60,
+                "rescanIntervalS": RESCAN_S,
+                "order": PULL_ORDER,
+                # Windows + many small files: syncing each file to disk one by one is very slow,
+                # and Syncthing re-checks anything lost in a crash anyway.
+                "disableFsync": True,
                 "versioning": VERSIONING,
             },
         )

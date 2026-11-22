@@ -8,6 +8,7 @@ use crate::paths::{normalize, PathMapper};
 use crate::router::{self, Decision, History, JobRecord, RouteInput, Target};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Where shim output goes (real terminal, or a buffer for MCP).
@@ -96,6 +97,8 @@ struct PcTiming {
     cached: bool,
     /// From sending the job until its exit event.
     stream_secs: f64,
+    /// The job failed because something it needs isn't on the PC (see `prepare::missing_on_pc`).
+    missing_on_pc: Option<&'static str>,
 }
 
 /// The PC job this process is currently following, so Ctrl-C can stop it on the PC too.
@@ -486,6 +489,24 @@ impl Engine {
         if force.is_none() && plan.class.kind == JobKind::Light {
             return self.local_fallback(tool, args, cwd, plan.class.reason.clone(), None, None);
         }
+        // The job's folder: compared with the PC before sending, and checked for Mac-only programs.
+        let scan = mapper.mac_to_rel(&normalize(cwd)).map(|_| crate::prepare::scan_folder(cwd));
+        let mac_only = crate::prepare::mac_only_in_command(args)
+            .map(|m| format!("the command uses {m}, which only exists on a Mac"))
+            .or_else(|| {
+                if !crate::prepare::runs_project_code(&tool_l, args) {
+                    return None;
+                }
+                let p = scan.as_ref()?.mac_only_program.clone()?;
+                Some(format!("this project uses a Mac-only program ({p}) and has no Windows version of it"))
+            });
+        if let Some(why) = &mac_only {
+            if force.is_none() {
+                let why = format!("{why}, so it ran on the Mac");
+                return self.local_fallback(tool, args, cwd, why, None, Some(&plan));
+            }
+            io.err(&format!("[PC Bridge] warning: {why}. Sending it to the PC as asked, but it may not work there.\n"));
+        }
 
         // Decide before waking: if the PC is asleep and the Mac would be quicker even without the
         // wake-up, don't wake it at all.
@@ -532,10 +553,29 @@ impl Engine {
         if force.is_none() && decision.target == Target::Mac {
             return self.local_fallback(tool, args, cwd, decision.reason.clone(), Some(decision), Some(&plan));
         }
-        match self.run_on_pc(&tool_l, &plan, io) {
+        match self.run_on_pc(&tool_l, &plan, args, cwd, scan.as_ref(), io) {
             // The PC accepted the job: whatever happened there (including "program not installed on
             // the PC", reported in `r.missing`) is the result. It is never run again on the Mac.
             Ok((mut r, t)) => {
+                // It failed only because something it needs isn't on the PC (a file still copying,
+                // a package or program the PC lacks): the Mac has everything, so run it there.
+                // Shell commands (PowerShell, cmd) are Windows-only, and a job asked for on the PC
+                // stays a PC result.
+                if let Some(why) = t.missing_on_pc {
+                    if r.exit_code != 0
+                        && force.is_none()
+                        && r.missing.is_none()
+                        && shell_quote(&tool_l).is_none()
+                        && r.seconds < 600.0
+                    {
+                        let why = format!("It failed on the PC because {why}, so it ran on the Mac instead");
+                        io.err(&format!("[PC Bridge] {why}\n"));
+                        if self.cfg.notify_on_fallback {
+                            io.notify(&why);
+                        }
+                        return self.local_fallback(tool, args, cwd, why, Some(decision), Some(&plan));
+                    }
+                }
                 // Honest about why: when the PC was asked for but the router would have kept it here.
                 r.reason = if force == Some(Target::Pc) && decision.target == Target::Mac {
                     format!(
@@ -598,10 +638,163 @@ impl Engine {
         }
     }
 
-    fn run_on_pc(&self, tool: &str, plan: &Plan, io: &mut dyn ShimIo) -> Result<(ShimResult, PcTiming), ClientError> {
+    /// How far the copy of the shared folder holding `dir` to the PC is, in words.
+    fn copy_progress(&self, dir: &Path) -> String {
+        let Some(folder) = self.cfg.shared_folders.iter().find(|f| dir.starts_with(&f.mac_path)) else {
+            return String::new();
+        };
+        match crate::syncthing::Syncthing::new(self.cfg.syncthing_api_key.clone()).pc_progress(&folder.name) {
+            Some((pct, bytes, files)) => format!(
+                " (the folder copy to the PC is {pct:.0}% done: {files} files, {} to go)",
+                crate::prepare::human_bytes(bytes)
+            ),
+            None => " (the folder copy to the PC isn't running: is PC Bridge open on the Mac?)".into(),
+        }
+    }
+
+    /// Send the job's folder files the PC doesn't have yet, so a job never starts with half its
+    /// files (the folder copy may still be running). Too much missing: a plain error instead.
+    fn send_missing_files(
+        &self,
+        client: &AgentClient,
+        mapper: &PathMapper,
+        cwd: &Path,
+        scan: &crate::prepare::FolderScan,
+        io: &mut dyn ShimIo,
+    ) -> Result<(), ClientError> {
+        use crate::prepare::{human_bytes, MAX_PUSH_BYTES, MAX_PUSH_FILES};
+        let local: Vec<(String, u64, &Path)> = scan
+            .files
+            .iter()
+            .filter_map(|f| mapper.mac_to_rel(&f.path).map(|r| (r, f.size, f.path.as_path())))
+            .collect();
+        let list: Vec<(String, u64)> = local.iter().map(|(r, s, _)| (r.clone(), *s)).collect();
+        let Some(missing) = client.check_files(&list)? else { return Ok(()) };
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let missing: std::collections::HashSet<String> = missing.into_iter().collect();
+        let todo: Vec<&(String, u64, &Path)> = local.iter().filter(|(r, _, _)| missing.contains(r)).collect();
+        let bytes: u64 = todo.iter().map(|(_, s, _)| *s).sum();
+        if todo.len() > MAX_PUSH_FILES || bytes > MAX_PUSH_BYTES {
+            return Err(ClientError::Other(format!(
+                "the PC doesn't have {} files ({}) of this folder yet{}",
+                todo.len(),
+                human_bytes(bytes),
+                self.copy_progress(cwd)
+            )));
+        }
+        io.err(&format!(
+            "[PC Bridge] sending {} file{} ({}) the PC doesn't have yet…\n",
+            todo.len(),
+            if todo.len() == 1 { "" } else { "s" },
+            human_bytes(bytes)
+        ));
+        let start = Instant::now();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let first_error: Mutex<Option<ClientError>> = Mutex::new(None);
+        std::thread::scope(|sc| {
+            for _ in 0..4 {
+                sc.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((rel, _, path)) = todo.get(i) else { break };
+                    if first_error.lock().map(|e| e.is_some()).unwrap_or(true) {
+                        break;
+                    }
+                    if let Err(e) = client.push_file(path, rel) {
+                        if let Ok(mut g) = first_error.lock() {
+                            g.get_or_insert(e);
+                        }
+                        break;
+                    }
+                });
+            }
+        });
+        if let Some(e) = first_error.into_inner().ok().flatten() {
+            return Err(ClientError::Other(format!("couldn't send this folder's files to the PC ({e})")));
+        }
+        io.err(&format!("[PC Bridge] sent in {:.0} s\n", start.elapsed().as_secs_f64()));
+        Ok(())
+    }
+
+    /// Install a Node project's packages on the PC (`node_modules` is never copied: Mac packages
+    /// don't work on Windows) the first time, and again when its package list changes.
+    fn install_node_packages(
+        &self,
+        client: &AgentClient,
+        mapper: &PathMapper,
+        cwd: &Path,
+        args: &[String],
+        io: &mut dyn ShimIo,
+    ) -> Result<(), ClientError> {
+        let Some(root) = self.cfg.shared_folders.iter().find(|f| cwd.starts_with(&f.mac_path)) else {
+            return Ok(());
+        };
+        for dir in crate::prepare::node_projects(cwd, args, Path::new(&root.mac_path)) {
+            let Some(rel) = mapper.mac_to_rel(&dir) else { continue };
+            let marker = format!("{rel}/node_modules/.pcbridge-installed");
+            let st = client.stat(&marker)?;
+            let installed_at = st["mtime"].as_f64().filter(|_| st["exists"] == Value::Bool(true));
+            if installed_at.is_some_and(|t| t + 1.0 >= crate::prepare::node_manifest_mtime(&dir)) {
+                continue;
+            }
+            let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            io.err(&format!("[PC Bridge] installing the Node packages of “{name}” on the PC (first time, or its package list changed)…\n"));
+            let npm = crate::prepare::npm_install_argv(&dir).join(" ");
+            let argv: Vec<String> = if mapper.pc_root.starts_with('/') {
+                vec!["sh".into(), "-c".into(), format!("{npm} && touch node_modules/.pcbridge-installed")]
+            } else {
+                vec![
+                    "powershell".into(),
+                    "-NoProfile".into(),
+                    "-Command".into(),
+                    format!(
+                        "{npm}; if ($LASTEXITCODE -eq 0) {{ New-Item -Force -ItemType File node_modules\\.pcbridge-installed | Out-Null }}; exit $LASTEXITCODE"
+                    ),
+                ]
+            };
+            let req = RunRequest {
+                argv,
+                cwd: rel.clone(),
+                name: Some(format!("npm install ({name})")),
+                gpu: false,
+                inputs: vec![],
+                cache: false,
+                env: Default::default(),
+            };
+            let outcome = client.run(&req, |ev| {
+                if let Some(d) = ev["data"].as_str() {
+                    io.err(&mapper.rewrite_output(d));
+                }
+            })?;
+            if outcome.exit_code != 0 {
+                return Err(ClientError::Other(format!(
+                    "installing the Node packages of “{name}” on the PC failed (npm exit code {})",
+                    outcome.exit_code
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_on_pc(
+        &self,
+        tool: &str,
+        plan: &Plan,
+        args: &[String],
+        cwd: &Path,
+        scan: Option<&crate::prepare::FolderScan>,
+        io: &mut dyn ShimIo,
+    ) -> Result<(ShimResult, PcTiming), ClientError> {
         let client = self.client.as_ref().ok_or_else(|| ClientError::Other("not paired".into()))?;
         let mapper = self.mapper();
         let push_start = Instant::now();
+        if let Some(scan) = scan.filter(|s| !s.too_big) {
+            self.send_missing_files(client, &mapper, cwd, scan, io)?;
+        }
+        if crate::prepare::runs_node(tool, args) {
+            self.install_node_packages(client, &mapper, cwd, args, io)?;
+        }
         // Make sure inputs are on the PC (Syncthing may not have caught up yet).
         for (mac, rel) in &plan.inputs {
             let local_size = std::fs::metadata(mac).map(|m| m.len()).unwrap_or(0);
@@ -624,6 +817,7 @@ impl Engine {
         };
         // Once the PC has accepted the job, never run it a second time on the Mac.
         let mut accepted = false;
+        let mut stderr_tail = String::new();
         watch_ctrl_c();
         let result = client.run(&req, |ev| {
             accepted = true;
@@ -634,7 +828,16 @@ impl Engine {
                     }
                 }
                 Some("stdout") => io.out(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
-                Some("stderr") => io.err(&mapper.rewrite_output(ev["data"].as_str().unwrap_or(""))),
+                Some("stderr") => {
+                    let d = ev["data"].as_str().unwrap_or("");
+                    stderr_tail.push_str(d);
+                    if stderr_tail.len() > 16_384 {
+                        let cut = stderr_tail.len() - 8_192;
+                        let cut = (cut..stderr_tail.len()).find(|i| stderr_tail.is_char_boundary(*i)).unwrap_or(0);
+                        stderr_tail.drain(..cut);
+                    }
+                    io.err(&mapper.rewrite_output(d))
+                }
                 Some("queued") if ev["position"].as_u64().unwrap_or(0) > 1 => {
                     io.err(&format!("[PC Bridge] queued on the PC (position {})\n", ev["position"]));
                 }
@@ -702,6 +905,7 @@ impl Engine {
             transfer_secs: push_secs + sync_start.elapsed().as_secs_f64(),
             cached: outcome.cached,
             stream_secs,
+            missing_on_pc: crate::prepare::missing_on_pc(&stderr_tail),
         };
         let result = ShimResult {
             exit_code: outcome.exit_code,

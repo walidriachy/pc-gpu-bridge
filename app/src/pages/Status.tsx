@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errText, type Platform } from "../lib/api";
-import { duration } from "../lib/format";
+import { duration, gb } from "../lib/format";
 import { Card, Dot, MemoryCompare } from "../components/ui";
 
 function usePoll<T>(fn: () => Promise<T>, ms: number): [T | null, string] {
@@ -33,6 +33,33 @@ function GpuCard({ gpu }: { gpu: any }) {
       <p><strong>{g.name}</strong> · {g.temperature_c}°C</p>
       <div className="meter"><span>Busy</span><div className="membar-track"><div className="membar-fill good" style={{ width: `${g.utilization}%` }} /></div><span>{g.utilization}%</span></div>
       <div className="meter"><span>VRAM</span><div className="membar-track"><div className="membar-fill good" style={{ width: `${vram * 100}%` }} /></div><span>{(g.vram_used_mb / 1024).toFixed(1)} / {(g.vram_total_mb / 1024).toFixed(0)} GB</span></div>
+    </Card>
+  );
+}
+
+function SyncCard({ sync }: { sync: any[] | undefined }) {
+  if (!sync || sync.length === 0) return null;
+  return (
+    <Card title="Folder copy to the PC">
+      {sync.map((f) =>
+        f.percent == null ? (
+          <p key={f.name} className="muted">{f.name}: not running right now (it restarts within a minute).</p>
+        ) : f.need_files === 0 ? (
+          <p key={f.name}><Dot color="green" /> {f.name}: fully copied</p>
+        ) : (
+          <div key={f.name}>
+            <div className="meter">
+              <span>{f.name}</span>
+              <div className="membar-track"><div className="membar-fill good" style={{ width: `${f.percent}%` }} /></div>
+              <span>{Math.floor(f.percent)}%</span>
+            </div>
+            <p className="muted small">
+              {f.need_files.toLocaleString()} files ({gb(f.need_bytes)}) still to copy. Jobs send the files they need
+              themselves, so they don't have to wait for this.
+            </p>
+          </div>
+        ),
+      )}
     </Card>
   );
 }
@@ -141,6 +168,7 @@ function MacStatus() {
         <MemoryCompare mac={s.mac_memory} pc={s.pc?.memory} pressure={s.mac_memory?.pressure} />
       </Card>
       <GpuCard gpu={s.gpu} />
+      <SyncCard sync={s.sync} />
       <RunningCard pc={s.pc} />
     </div>
   );

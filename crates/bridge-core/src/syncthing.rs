@@ -13,6 +13,13 @@ pub const IGNORES: &[&str] =
     &["node_modules", ".next", ".venv", "__pycache__", "(?d).DS_Store", "*.pcbridge-part", ".git", ".claude"];
 /// Seconds Syncthing waits after a change before sending it (its default is 10).
 pub const WATCH_DELAY_S: u64 = 2;
+/// Full rescans, as a safety net only: the file watcher reports changes as they happen. Rescanning
+/// a big folder (100+ GB, ~1 million files) every minute kept both computers busy re-checking
+/// files instead of copying new ones.
+pub const RESCAN_S: u64 = 3600;
+/// Small files first: code, configs and scripts reach the PC long before big videos, so a job
+/// can start while large media is still copying (Syncthing's default order is random).
+pub const PULL_ORDER: &str = "smallestFirst";
 
 /// Overwritten or deleted files go to the folder's `.stversions` bin for 14 days instead of vanishing.
 pub fn versioning() -> Value {
@@ -81,12 +88,25 @@ impl Syncthing {
             Some(json!({
                 "id": id, "label": name, "path": path.display().to_string(), "type": "sendreceive",
                 "devices": devices.iter().map(|d| json!({"deviceID": d})).collect::<Vec<_>>(),
-                "fsWatcherEnabled": true, "fsWatcherDelayS": WATCH_DELAY_S, "rescanIntervalS": 60,
+                "fsWatcherEnabled": true, "fsWatcherDelayS": WATCH_DELAY_S, "rescanIntervalS": RESCAN_S,
+                "order": PULL_ORDER,
                 "versioning": versioning()
             })),
         )?;
         self.call(reqwest::Method::POST, &format!("/rest/db/ignores?folder={id}"), Some(json!({"ignore": IGNORES})))
             .map(|_| ())
+    }
+
+    /// How far the copy of a shared folder to the PC is: (percent, bytes left, files left).
+    /// The PC is the only device this private Syncthing talks to.
+    pub fn pc_progress(&self, name: &str) -> Option<(f64, u64, u64)> {
+        let id = folder_id(name);
+        let cfg = self.call(reqwest::Method::GET, &format!("/rest/config/folders/{id}"), None).ok()?;
+        let me = self.device_id().ok()?;
+        let pc =
+            cfg["devices"].as_array()?.iter().filter_map(|d| d["deviceID"].as_str()).find(|d| *d != me)?.to_string();
+        let c = self.call(reqwest::Method::GET, &format!("/rest/db/completion?folder={id}&device={pc}"), None).ok()?;
+        Some((c["completion"].as_f64()?, c["needBytes"].as_u64().unwrap_or(0), c["needItems"].as_u64().unwrap_or(0)))
     }
 
     /// Per-folder sync completion (0–100) as reported by Syncthing.
@@ -162,6 +182,7 @@ pub fn start(bin: &Path, data_home: &Path, api_key: &str) -> Result<Child, Strin
         .arg(format!("--home={}", data_home.display()))
         .arg(format!("--gui-address={API_ADDR}"))
         .arg(format!("--gui-apikey={api_key}"))
+        .arg(format!("--logfile={}", data_home.with_file_name("syncthing.log").display()))
         .env("STNOUPGRADE", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -31,6 +31,8 @@ enum RunMode {
     Refuse,
     /// A newer agent answers from its result cache, saying so in the exit event.
     Cached,
+    /// The job runs but a Python package it imports isn't installed on the PC.
+    NoModule,
 }
 
 fn start_mock() -> (String, Arc<Mutex<Seen>>) {
@@ -163,6 +165,18 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                         };
                         ("application/json", body.to_string().into_bytes())
                     }
+                    ("POST", "/files/check") => {
+                        // Agent 0.1.8: files whose name contains "need" aren't on the PC yet.
+                        let b: Value = serde_json::from_slice(&body).unwrap();
+                        let missing: Vec<Value> = b["files"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|f| f["path"].clone())
+                            .filter(|p| p.as_str().unwrap().contains("need"))
+                            .collect();
+                        ("application/json", json!({ "missing": missing }).to_string().into_bytes())
+                    }
                     ("POST", "/files/push") => {
                         seen.lock().unwrap().pushed.push(body.len());
                         (
@@ -186,6 +200,18 @@ fn start_mock_with(mode: RunMode) -> (String, Arc<Mutex<Seen>>) {
                                 json!({"type": "stderr", "data": "PC Bridge: FFmpeg isn't installed on the PC. Ask Claude to install it (tool pc_install, program \"ffmpeg\"), or on the PC open PC Bridge → Settings → Programs → Install.\n"}),
                                 json!({"type": "missing", "program": "ffmpeg", "name": "FFmpeg"}),
                                 json!({"type": "exit", "code": 127, "state": "failed", "duration": 0.1, "outputs": []}),
+                            ]),
+                        )
+                    }
+                    ("POST", "/run") if mode == RunMode::NoModule => {
+                        seen.lock().unwrap().run_bodies.push(serde_json::from_slice(&body).unwrap());
+                        (
+                            "application/x-ndjson",
+                            ndjson(&[
+                                json!({"type": "job", "id": "nm1", "folder": r"D:\PCBridge\jobs\n"}),
+                                json!({"type": "started"}),
+                                json!({"type": "stderr", "data": "ModuleNotFoundError: No module named 'cv2'\n"}),
+                                json!({"type": "exit", "code": 1, "state": "failed", "duration": 0.4, "outputs": []}),
                             ]),
                         )
                     }
@@ -681,4 +707,68 @@ fn missing_key_file_fails_fast_instead_of_hanging() {
     let r = engine.run("ffmpeg", &args, dir.path(), Some(Target::Pc), &mut io);
     assert_eq!(r.exit_code, 3);
     assert!(r.reason.contains("Open the PC Bridge app once"), "{}", r.reason);
+}
+
+/// A script job in a project that bundles only Mac builds of a program stays on the Mac.
+#[test]
+fn mac_only_project_runs_on_the_mac() {
+    let (url, seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("train.py"), "import torch\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("engine/browser/mac_arm-158/bin")).unwrap();
+    std::fs::write(dir.path().join("engine/browser/mac_arm-158/bin/chrome"), b"x").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| 0);
+    let mut io = Capture::default();
+    let r = engine.run("python3", &args(&["train.py"]), dir.path(), None, &mut io);
+    assert_eq!(r.target, Target::Mac, "{}", r.reason);
+    assert!(r.reason.contains("Mac-only program (engine/browser/mac_arm-158)"), "{}", r.reason);
+    assert!(seen.lock().unwrap().run_bodies.is_empty());
+    // Asked for on the PC: sent anyway, with a warning.
+    let r = engine.run("python3", &args(&["train.py"]), dir.path(), Some(Target::Pc), &mut io);
+    assert_eq!(r.target, Target::Pc);
+    assert!(io.stderr.contains("warning: this project uses a Mac-only program"), "{}", io.stderr);
+}
+
+/// Failing on the PC only because something is missing there: the Mac runs it instead.
+#[test]
+fn missing_python_package_on_pc_reruns_on_the_mac() {
+    let (url, seen) = start_mock_with(RunMode::NoModule);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("train.py"), "import torch\n").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| 0);
+    let mut io = Capture::default();
+    let r = engine.run("python3", &args(&["train.py"]), dir.path(), None, &mut io);
+    assert_eq!(seen.lock().unwrap().run_bodies.len(), 1, "it was tried on the PC first");
+    assert_eq!(r.target, Target::Mac, "{}", r.reason);
+    assert_eq!(r.exit_code, 0);
+    assert!(r.reason.contains("a Python package it needs isn't installed on the PC"), "{}", r.reason);
+    // Asked for on the PC: the PC's failure is the result.
+    let r = engine.run("python3", &args(&["train.py"]), dir.path(), Some(Target::Pc), &mut io);
+    assert_eq!((r.target, r.exit_code), (Target::Pc, 1));
+}
+
+/// Folder files the PC doesn't have yet are sent before the job starts.
+#[test]
+fn missing_folder_files_are_sent_before_the_job() {
+    let (url, seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"0123456789").unwrap();
+    std::fs::create_dir_all(dir.path().join("engine")).unwrap();
+    std::fs::write(dir.path().join("engine/need.mjs"), b"export {}").unwrap();
+    std::fs::write(dir.path().join("engine/have.mjs"), b"export {}").unwrap();
+    std::fs::create_dir_all(dir.path().join("node_modules/x")).unwrap();
+    std::fs::write(dir.path().join("node_modules/x/need.js"), b"skipped").unwrap();
+    let engine = engine_for(&url, dir.path(), |_, _, _| panic!("should run on the PC"));
+    let mut io = Capture::default();
+    let r = engine.run(
+        "ffmpeg",
+        &args(&["-i", "in.mov", "-c:v", "libx264", "out.mp4"]),
+        dir.path(),
+        Some(Target::Pc),
+        &mut io,
+    );
+    assert_eq!(r.target, Target::Pc);
+    assert!(io.stderr.contains("sending 1 file (1 KB) the PC doesn't have yet"), "{}", io.stderr);
+    // engine/need.mjs, then in.mov (named in the command, the PC has no copy).
+    assert_eq!(seen.lock().unwrap().pushed.len(), 2);
 }

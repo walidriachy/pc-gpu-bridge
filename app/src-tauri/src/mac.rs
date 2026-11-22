@@ -789,9 +789,27 @@ pub async fn status_snapshot() -> Result<Value, String> {
             "pc": pc_status,
             "gpu": gpu,
             "shared_folders": cfg.shared_folders,
+            "sync": sync_progress(&cfg),
         }))
     })
     .await
+}
+
+/// How far each shared folder's copy to the PC is (null when this Mac's Syncthing isn't running).
+fn sync_progress(cfg: &BridgeConfig) -> Value {
+    if cfg.syncthing_api_key.is_empty() {
+        return json!([]);
+    }
+    let st = syncthing::Syncthing::new(cfg.syncthing_api_key.clone());
+    json!(cfg
+        .shared_folders
+        .iter()
+        .map(|f| match st.pc_progress(&f.name) {
+            Some((pct, bytes, files)) =>
+                json!({"name": f.name, "percent": pct, "need_bytes": bytes, "need_files": files}),
+            None => json!({"name": f.name, "percent": null}),
+        })
+        .collect::<Vec<_>>())
 }
 
 #[tauri::command]
