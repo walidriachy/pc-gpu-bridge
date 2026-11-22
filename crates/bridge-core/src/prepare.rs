@@ -81,7 +81,7 @@ pub fn scan_folder(dir: &Path) -> FolderScan {
                 continue;
             }
             if mac.is_none() && mac_marker(&name) {
-                mac = Some(e.path().strip_prefix(dir).unwrap_or(&e.path()).display().to_string());
+                mac = Some(e.path().strip_prefix(dir).unwrap_or(&e.path()).to_string_lossy().replace('\\', "/"));
             }
             if windows_marker(&name) {
                 windows = true;
@@ -288,7 +288,7 @@ mod tests {
         std::fs::write(r.join(".DS_Store"), b"x").unwrap();
         let scan = scan_folder(r);
         let mut names: Vec<String> =
-            scan.files.iter().map(|f| f.path.strip_prefix(r).unwrap().display().to_string()).collect();
+            scan.files.iter().map(|f| f.path.strip_prefix(r).unwrap().to_string_lossy().replace('\\', "/")).collect();
         names.sort();
         assert_eq!(names, vec!["engine/browser/chrome-headless-shell/mac_arm-158/bin/chrome", "engine/reel.mjs"]);
         assert_eq!(scan.mac_only_program.as_deref(), Some("engine/browser/chrome-headless-shell/mac_arm-158"));
