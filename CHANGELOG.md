@@ -4,6 +4,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-11-23
+
+### Fixed
+- **No more stream of "where.exe — Application Error" windows on the PC.** The PC app's background check looked for Syncthing by running `where.exe` every 15 seconds, and started a new helper or Syncthing whenever it hadn't started the running one itself (for example one left running by the copy of the app before an update). When Windows was short of memory each attempt failed with an error window. Now it looks for Syncthing at most once every 10 minutes, leaves a helper or Syncthing that is already running alone, waits longer and longer (up to 10 minutes) between restarts of a helper that keeps stopping, and programs it starts fail quietly instead of opening error windows.
+
 ## [0.1.6] — 2026-11-23
 
 ### Fixed
@@ -115,7 +120,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...v0.1.4

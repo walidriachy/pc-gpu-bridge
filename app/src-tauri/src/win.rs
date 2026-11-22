@@ -465,13 +465,39 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Where Syncthing is, looked up with `where.exe` at most once every 10 minutes. The watchdog calls
+/// this every 15 s; running `where.exe` that often meant an error window every 15 s whenever Windows
+/// was short of memory and couldn't start it (0xc0000017).
+fn syncthing_bin() -> Option<String> {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static CACHE: Mutex<Option<(Option<String>, Instant)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((found, at)) = cache.as_ref() {
+        let still_there = found.as_deref().map(|p| Path::new(p).is_file()).unwrap_or(false);
+        if still_there || (found.is_none() && at.elapsed() < Duration::from_secs(600)) {
+            return found.clone();
+        }
+    }
+    let found = which("syncthing");
+    *cache = Some((found.clone(), Instant::now()));
+    found
+}
+
+/// Something already answers on this local address (the agent on 8765, Syncthing on 8385).
+fn listening(addr: &str) -> bool {
+    addr.parse().map(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(500)).is_ok()).unwrap_or(false)
+}
+
 /// Start (or restart) the agent and Syncthing as hidden background processes.
 pub fn start_services(state: &AppState) -> Result<(), String> {
     let ws = load_state();
     let mut procs = state.procs.lock().unwrap();
     let alive =
         |c: &mut Option<std::process::Child>| c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
-    if !alive(&mut procs.agent) && venv_python().exists() {
+    // A helper this copy of the app didn't start (an older copy's, left running across an update)
+    // is still a running helper: starting a second one would only fail and be retried every 15 s.
+    if !alive(&mut procs.agent) && venv_python().exists() && !listening("127.0.0.1:8765") {
         refresh_path();
         let child = command(&venv_python().display().to_string())
             .args(["-m", "pcbridge_agent", "--root", &ws.root])
@@ -479,8 +505,9 @@ pub fn start_services(state: &AppState) -> Result<(), String> {
             .map_err(|e| format!("Couldn't start the agent: {e}"))?;
         procs.agent = Some(child);
     }
-    if !alive(&mut procs.syncthing) && !ws.syncthing_api_key.is_empty() {
-        if let Some(bin) = which("syncthing") {
+    if !alive(&mut procs.syncthing) && !ws.syncthing_api_key.is_empty() && !listening(bridge_core::syncthing::API_ADDR)
+    {
+        if let Some(bin) = syncthing_bin() {
             let home = PathBuf::from(&ws.root).join("config").join("syncthing");
             let _ = std::fs::create_dir_all(&home);
             let child = command(&bin)
@@ -497,21 +524,64 @@ pub fn start_services(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+/// How many helpers this copy of the app started and are still running (0–2).
+fn running_children(state: &AppState) -> u8 {
+    let mut guard = state.procs.lock().unwrap();
+    let procs = &mut *guard;
+    let mut n = 0;
+    for c in [&mut procs.agent, &mut procs.syncthing] {
+        if c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Programs this app starts inherit its error mode. With these flags, a program Windows can't start
+/// (for example when memory runs out) fails quietly instead of opening an error window.
+#[cfg(windows)]
+fn quiet_child_errors() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetErrorMode(mode: u32) -> u32;
+    }
+    const SEM_FAILCRITICALERRORS: u32 = 0x0001;
+    const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
+    const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
+    // SAFETY: SetErrorMode only changes this process's error-mode flags.
+    unsafe {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    }
+}
+
 /// Background watchdog: keep services running (Windows only, after setup).
 pub fn spawn_watchdog(app: tauri::AppHandle, state: AppState) {
     std::thread::spawn(move || {
         if !cfg!(windows) {
             return;
         }
+        #[cfg(windows)]
+        quiet_child_errors();
         if let Err(e) = ensure_agent_current(&app, &state) {
             eprintln!("PC Bridge: couldn't update the helper: {e}");
         }
         tailscale_unattended();
         let mut tick: u64 = 0;
+        // Wait longer between restarts while a helper keeps dying (15 s, 30 s, 1 min … up to 10 min),
+        // so a helper that can't start never turns into a stream of processes and error windows.
+        let mut wait_ticks: u64 = 1;
+        let mut next_try: u64 = 0;
         loop {
             // Start the helper whenever it's installed, even if the wizard was never closed with Finish.
-            if agent_installed() {
+            if agent_installed() && tick >= next_try {
+                let before = running_children(&state);
                 let _ = start_services(&state);
+                if running_children(&state) > before {
+                    next_try = tick + wait_ticks;
+                    wait_ticks = (wait_ticks * 2).min(40);
+                } else if before == 2 {
+                    wait_ticks = 1;
+                }
             }
             if tick.is_multiple_of(4) {
                 let _ = keep_tailscale_up();

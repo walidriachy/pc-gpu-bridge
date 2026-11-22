@@ -200,6 +200,7 @@ timeline
   v0.1.4 : Router learns from both machines : No more Keychain prompt : One pairing per Mac : Safer file sync
   v0.1.5 : Decide before waking : Real queue estimate : Finish notifications : Setup refresh after updates
   v0.1.6 : No more hangs on an old Keychain key
+  v0.1.7 : No more error windows on the PC
   v0.2 : Background jobs : Live progress and log viewer : Better estimates : Learned RAM/VRAM : Signed and notarised builds
   v0.3 : Several PCs / GPUs : Linux PC agent : Wake via Tailscale relay when away from home
 ```
