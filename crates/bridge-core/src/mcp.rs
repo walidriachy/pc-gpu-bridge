@@ -244,7 +244,7 @@ fn awake_client(engine: &Engine) -> Result<&crate::client::AgentClient, Value> {
     };
     match engine.ensure_awake(&mut Capture::default()) {
         Ok(_) => Ok(client),
-        Err(problem) if problem == crate::shim::KEY_REFUSED => Err(error(problem)),
+        Err(problem) if crate::shim::is_key_problem(&problem) => Err(error(problem)),
         Err(problem) => Err(error(format!(
             "{problem}. Check the PC is on and PC Bridge is running there (Wake-on-LAN only works on the same home network)."
         ))),
@@ -528,7 +528,7 @@ pub fn call_tool(engine: &Engine, name: &str, args: &Value) -> Value {
             match engine.ensure_awake(&mut io) {
                 Ok((_, true)) => text(format!("The PC is already awake.{}", engine.client.as_ref().map(lease).unwrap_or_default())),
                 Ok((_, false)) => text(format!("The PC woke up and is ready.{}", engine.client.as_ref().map(lease).unwrap_or_default())),
-                Err(problem) if problem == crate::shim::KEY_REFUSED => error(problem),
+                Err(problem) if crate::shim::is_key_problem(&problem) => error(problem),
                 Err(_) => error("Couldn't wake the PC. Wake-on-LAN only works when the Mac is on the same home network; check the PC is plugged in and Wake-on-LAN is enabled."),
             }
         }

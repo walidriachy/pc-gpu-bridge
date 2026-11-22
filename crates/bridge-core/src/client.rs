@@ -70,6 +70,10 @@ fn map_err(e: reqwest::Error) -> ClientError {
 }
 
 impl AgentClient {
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+
     pub fn new(base: impl Into<String>, token: Option<String>) -> Self {
         let http = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(4))

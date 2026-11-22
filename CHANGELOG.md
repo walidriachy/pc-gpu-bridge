@@ -4,6 +4,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-11-23
+
+### Fixed
+- **PC jobs and PC tools no longer hang with no output after updating from an old version.** Versions before 0.1.4 kept the pairing key in the macOS Keychain. When the key hadn't been moved to `~/.pcbridge/token` yet, a job sent from a Claude session (or Claude starting PC Bridge's tools) asked the Keychain for it, and macOS showed a password window nobody could see, so everything waited forever. Now only the PC Bridge app reads the Keychain, and it moves the key as soon as it starts. If the key file is missing, jobs and tools stop at once with a plain message ("open the PC Bridge app once") and the job runs on the Mac instead.
+
 ## [0.1.5] — 2026-11-21
 
 ### Changed
@@ -110,7 +115,8 @@ First public release.
 - The Tailscale check on the Mac reported "not connected" when the app was opened from Finder. The Tailscale CLI needs `TAILSCALE_BE_CLI=1` when there's no terminal.
 - Mac paths are now always built with `/`, including in the Windows build of the shared core.
 
-[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/walidriachy/pc-gpu-bridge/compare/v0.1.2...v0.1.3

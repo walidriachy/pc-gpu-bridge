@@ -5,6 +5,9 @@
 //! every update looked like a new app to macOS and the Keychain asked for the Mac password again.
 //! A key still in the Keychain is moved to the file the first time it is read (that read may ask
 //! one last time) and then removed from the Keychain.
+//! Only the app reads the Keychain: the shim and the MCP server run inside Claude sessions where
+//! nobody can see a macOS password window, so a Keychain read there would hang with no output.
+//! They use [`get_token_quiet`], which never touches the Keychain.
 //! `PCBRIDGE_TOKEN` overrides everything (used by tests and CI).
 
 use std::path::{Path, PathBuf};
@@ -16,11 +19,17 @@ pub fn token_path() -> PathBuf {
     crate::config::home_dir().join("token")
 }
 
-pub fn get_token() -> Option<String> {
+/// For command-line tools (shim, MCP): the environment or the file, never the Keychain.
+pub fn get_token_quiet() -> Option<String> {
     if let Ok(t) = std::env::var("PCBRIDGE_TOKEN") {
         return Some(t);
     }
-    if let Some(t) = read_token_file(&token_path()) {
+    read_token_file(&token_path())
+}
+
+/// For the app only: may move an old Keychain key to the file, which can show a macOS password window.
+pub fn get_token() -> Option<String> {
+    if let Some(t) = get_token_quiet() {
         return Some(t);
     }
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).ok()?;

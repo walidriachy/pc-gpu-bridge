@@ -652,3 +652,33 @@ fn forced_pc_runs_say_why_honestly() {
     assert_eq!(r.target, Target::Pc);
     assert!(r.reason.starts_with("Sent to the PC as asked"), "{}", r.reason);
 }
+
+/// A missing key file must fail fast with a plain message, never fall back to the Keychain (whose
+/// password window nobody sees from a Claude session, so the job hung with no output).
+#[test]
+fn missing_key_file_fails_fast_instead_of_hanging() {
+    let (url, _seen) = start_mock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.mov"), b"x").unwrap();
+    let mut cfg = BridgeConfig::default();
+    cfg.shared_folders = vec![SharedFolder { mac_path: dir.path().display().to_string(), name: "w".into() }];
+    cfg.pc_mac_address = "00:11:22:33:44:55".into();
+    cfg.notify_on_fallback = false;
+    let engine = Engine {
+        cfg,
+        client: Some(AgentClient::new(url, None)),
+        history: None,
+        mac_mem: None,
+        local: |_, _, _| 0,
+        wake_timeout: Duration::from_secs(60),
+    };
+    let mut io = Capture::default();
+    let start = std::time::Instant::now();
+    let err = engine.ensure_awake(&mut io).unwrap_err();
+    assert_eq!(err, bridge_core::shim::KEY_MISSING);
+    assert!(start.elapsed() < Duration::from_secs(5), "must not wait");
+    let args: Vec<String> = ["-i", "in.mov", "-c:v", "libx264", "o.mp4"].iter().map(|s| s.to_string()).collect();
+    let r = engine.run("ffmpeg", &args, dir.path(), Some(Target::Pc), &mut io);
+    assert_eq!(r.exit_code, 3);
+    assert!(r.reason.contains("Open the PC Bridge app once"), "{}", r.reason);
+}

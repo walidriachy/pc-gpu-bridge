@@ -121,6 +121,15 @@ fn watch_ctrl_c() {
 pub const KEY_REFUSED: &str =
     "The PC didn't accept this Mac's pairing key. Pair again: on the Mac open PC Bridge → Settings → Run setup again";
 
+/// Paired, but the key file is missing: an old version left the key in the macOS Keychain, and only
+/// the app may read it there (a Keychain window can't be seen from a Claude session, so it would hang).
+pub const KEY_MISSING: &str = "This Mac's pairing key isn't in ~/.pcbridge/token yet. Open the PC Bridge app once (macOS may ask for your Mac password one last time; type it only in that macOS window), then try again. If it still fails, pair again: PC Bridge → Settings → Run setup again";
+
+/// A pairing-key problem: waking or retrying won't help, so it is shown as is.
+pub fn is_key_problem(problem: &str) -> bool {
+    problem == KEY_REFUSED || problem == KEY_MISSING
+}
+
 #[derive(Debug, Clone)]
 pub struct ShimResult {
     pub exit_code: i32,
@@ -308,7 +317,7 @@ pub fn plan(mapper: &PathMapper, tool: &str, args: &[String], cwd: &Path) -> Res
 
 impl Engine {
     pub fn from_config(cfg: BridgeConfig) -> Self {
-        let client = cfg.is_paired().then(|| AgentClient::new(cfg.base_url(), crate::secrets::get_token()));
+        let client = cfg.is_paired().then(|| AgentClient::new(cfg.base_url(), crate::secrets::get_token_quiet()));
         let history = History::open(&crate::config::home_dir().join("history.sqlite")).ok();
         Self { cfg, client, history, mac_mem: None, local: run_local_real, wake_timeout: Duration::from_secs(90) }
     }
@@ -372,6 +381,9 @@ impl Engine {
         let Some(client) = self.client.as_ref() else {
             return Err("This Mac isn't paired with a PC yet. Open PC Bridge to set it up.".into());
         };
+        if !client.has_token() {
+            return Err(KEY_MISSING.into());
+        }
         match client.status() {
             Ok(s) => return Ok((s, true)),
             // Waking won't help: the PC is on and turned the key down.

@@ -73,6 +73,13 @@ fn run_gui(minimized: bool) {
             mac::heal_install_location(app.handle(), minimized);
             tray::build(app.handle())?;
             updates::spawn_auto_update(app.handle().clone());
+            if cfg!(target_os = "macos") {
+                // Move a pairing key an old version left in the Keychain to ~/.pcbridge/token now,
+                // while the app is open: the shim and MCP server never read the Keychain.
+                std::thread::spawn(|| {
+                    let _ = bridge_core::secrets::get_token();
+                });
+            }
             if minimized {
                 if let Some(w) = app.get_webview_window("main") {
                     if cfg!(target_os = "macos") {
