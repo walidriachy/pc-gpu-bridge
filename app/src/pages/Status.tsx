@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errText, type Platform } from "../lib/api";
-import { duration, gb } from "../lib/format";
+import { duration, gb, jobLabel } from "../lib/format";
 import { Card, Dot, MemoryCompare } from "../components/ui";
 
 function usePoll<T>(fn: () => Promise<T>, ms: number): [T | null, string] {
@@ -73,7 +73,9 @@ function RunningCard({ pc }: { pc: any }) {
       ) : (
         running.map((j) => (
           <div key={j.id} className="job-line">
-            <span className="spinner" /> <strong>{j.name}</strong> · {duration(j.duration)}
+            <span className="spinner" />
+            <strong className="job-name" title={j.name}>{jobLabel(j.name)}</strong>
+            <span className="job-time">· {duration(j.duration)}</span>
             <button className="btn small ghost" onClick={() => api.cancelJob(j.id)}>Cancel</button>
           </div>
         ))

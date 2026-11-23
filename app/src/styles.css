@@ -129,7 +129,12 @@ li { margin-bottom: 4px; }
 .membar .muted { margin-top: 5px; }
 .meter { display: grid; grid-template-columns: 46px 1fr auto; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 8px; }
 .job-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-.job-line .btn { margin-left: auto; }
+.job-line .btn { margin-left: auto; flex-shrink: 0; }
+.job-line .spinner { flex-shrink: 0; }
+/* Long commands stay on one line inside the card; the full command is in the tooltip. */
+.job-line .job-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-line .job-time { flex-shrink: 0; white-space: nowrap; }
+.job-cell { max-width: 420px; overflow-wrap: anywhere; }
 
 /* Switch (checkbox styled as toggle) */
 .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 4px 0; user-select: none; }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { api, errText, type Platform } from "../lib/api";
-import { duration, timeAgo } from "../lib/format";
+import { duration, jobLabel, timeAgo } from "../lib/format";
 import { Card } from "../components/ui";
 
 const STATE_LABEL: Record<string, string> = {
@@ -56,7 +56,7 @@ export function Jobs({ platform }: { platform: Platform }) {
             <tbody>
               {jobs.map((j) => (
                 <tr key={j.id}>
-                  <td title={(j.argv || []).join(" ")}>{j.name}{j.cached && <span className="pill">reused</span>}</td>
+                  <td className="job-cell" title={(j.argv || []).join(" ") || j.name}>{jobLabel(j.name)}{j.cached && <span className="pill">reused</span>}</td>
                   <td>{STATE_LABEL[j.state] || j.state}{j.exit_code ? ` (code ${j.exit_code})` : ""}</td>
                   <td>{duration(j.duration)}</td>
                   <td>{timeAgo(j.created)}</td>

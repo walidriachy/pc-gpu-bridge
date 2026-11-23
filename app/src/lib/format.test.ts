@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanCode, driveName, duration, gb, hasRoom, sizeText, spaceNeededGb, speedup, timeAgo, usedFraction } from "./format";
+import { cleanCode, driveName, duration, gb, jobLabel, hasRoom, sizeText, spaceNeededGb, speedup, timeAgo, usedFraction } from "./format";
 
 describe("format helpers", () => {
   it("formats gigabytes", () => {
@@ -42,5 +42,13 @@ describe("format helpers", () => {
     expect(driveName("C:\\")).toBe("C:");
     expect(driveName("D:")).toBe("D:");
     expect(driveName("/")).toBe("/");
+  });
+  it("drops env setup from job names", () => {
+    expect(jobLabel('$env:REEL_CHROME="$env:LOCALAPPDATA\\PCBridgeTools\\a b.exe"; $env:REEL_PYTHON=\'C:\\x\\python.exe\'; node engine/reel.mjs render v01')).toBe("node engine/reel.mjs render v01");
+    expect(jobLabel("FOO=1 BAR=\"a b\" python run.py")).toBe("python run.py");
+    expect(jobLabel("set FOO=1 && npm test")).toBe("npm test");
+    expect(jobLabel("ffmpeg -i a.mov b.mp4")).toBe("ffmpeg -i a.mov b.mp4");
+    expect(jobLabel('$env:A="x";')).toBe('$env:A="x";');
+    expect(jobLabel("")).toBe("job");
   });
 });

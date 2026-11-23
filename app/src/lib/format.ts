@@ -59,3 +59,14 @@ export function sizeText(sizeGb: number): string {
 export function driveName(drive: string): string {
   return drive.replace(/[\\/]+$/, "") || drive || "C:";
 }
+
+/**
+ * A job's name as people read it: the command without the setup in front of it.
+ * `$env:A="x"; $env:B='y'; node render.mjs` -> `node render.mjs`, `set A=x && node …` -> `node …`.
+ */
+export function jobLabel(name: string | null | undefined): string {
+  let s = (name || "").trim();
+  const lead = /^(?:\$env:[\w.]+\s*=\s*(?:"[^"]*"|'[^']*'|[^;\s]+)\s*;\s*|set\s+"?[\w.]+=[^&]*&&\s*|[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S+)\s+)/i;
+  for (let i = 0; i < 20 && lead.test(s); i++) s = s.replace(lead, "").trim();
+  return s || (name || "").trim() || "job";
+}

@@ -4,6 +4,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+- **A long job name ran out of the "Right now" box.** Jobs now show a short name without the setup in front (`$env:…=…;`), long names end in "…" inside the box, and the full command shows when you point at it. The Jobs list uses the same short name.
+
 ## [0.1.8] — 2026-11-23
 
 ### Fixed
