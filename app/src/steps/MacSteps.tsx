@@ -139,7 +139,7 @@ function FoldersStep({ setDone }: StepCtx) {
       <ul className="folder-list">
         {folders.map((f) => (
           <li key={f}>
-            📁 {f}
+            <div className="folder-info">📁 {f}</div>
             <button className="btn small ghost" onClick={() => setFolders((l) => l.filter((x) => x !== f))}>Remove</button>
           </li>
         ))}

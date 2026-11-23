@@ -64,8 +64,8 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
         </label>
       </Card>
       <Card title="Paired PC">
-        <p>{cfg.pc_hostname || cfg.pc_host || "Not paired"} {cfg.pc_host && <span className="muted">({cfg.pc_host})</span>}</p>
-        <p className="muted small">PC folder: {cfg.pc_root}</p>
+        <p className="break">{cfg.pc_hostname || cfg.pc_host || "Not paired"} {cfg.pc_host && <span className="muted">({cfg.pc_host})</span>}</p>
+        <p className="muted small break">PC folder: {cfg.pc_root}</p>
         <div className="row">
           <button className="btn" onClick={onRerunSetup}>Run setup again</button>
           <button className="btn ghost" onClick={async () => { await api.unpair(); setMsg("Unpaired. Run setup again to pair."); }}>Unpair</button>
@@ -74,7 +74,11 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
       <Card title="Shared folders">
         <ul className="folder-list">
           {cfg.shared_folders.map((f) => (
-            <li key={f.mac_path}>📁 {f.mac_path} <span className="muted">→ PC: workspace\{f.name}</span>
+            <li key={f.mac_path}>
+              <div className="folder-info">
+                <div>📁 {f.mac_path}</div>
+                <div className="muted small">→ PC: workspace\{f.name}</div>
+              </div>
               <button className="btn small ghost" onClick={() => openPath(f.mac_path)}>Open</button>
             </li>
           ))}

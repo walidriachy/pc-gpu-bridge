@@ -32,12 +32,12 @@ function SyncCard({ sync }: { sync: any[] | undefined }) {
         ) : f.need_files === 0 ? (
           <p key={f.name}><Dot color="green" /> {f.name}: fully copied</p>
         ) : (
-          <div key={f.name}>
-            <div className="meter">
-              <span>{f.name}</span>
-              <div className="membar-track"><div className="membar-fill good" style={{ width: `${f.percent}%` }} /></div>
+          <div key={f.name} className="sync-row">
+            <div className="membar-head">
+              <strong className="one-line" title={f.name}>{f.name}</strong>
               <span>{Math.floor(f.percent)}%</span>
             </div>
+            <div className="membar-track"><div className="membar-fill good" style={{ width: `${f.percent}%` }} /></div>
             <p className="muted small">
               {f.need_files.toLocaleString()} files ({gb(f.need_bytes)}) still to copy. Jobs send the files they need
               themselves, so they don't have to wait for this.
@@ -169,7 +169,7 @@ function WinStatus() {
     <div className="grid">
       <Card title="This PC">
         <p className="status-line"><Dot color={ok ? "green" : s.agent_running ? "yellow" : "red"} /> {ok ? "Ready for jobs from your Mac" : s.agent_running ? "Tailscale is off — your Mac can't reach this PC" : "PC Bridge helper isn't running"}</p>
-        <p className="muted small">Files: {s.root}</p>
+        <p className="muted small break">Files: {s.root}</p>
       </Card>
       <Card title="Memory">
         <MemoryCompare mac={s.status?.peer_memory} pc={s.status?.memory} />

@@ -5,7 +5,7 @@ export function gb(bytes: number | null | undefined, digits = 1): string {
 
 export function duration(secs: number | null | undefined): string {
   if (secs == null || !isFinite(secs)) return "–";
-  if (secs < 1) return "under a second";
+  if (secs < 1) return "under 1 s";
   if (secs < 60) return `${Math.round(secs)} s`;
   const m = Math.floor(secs / 60);
   const s = Math.round(secs % 60);
@@ -66,7 +66,7 @@ export function driveName(drive: string): string {
  */
 export function jobLabel(name: string | null | undefined): string {
   let s = (name || "").trim();
-  const lead = /^(?:\$env:[\w.]+\s*=\s*(?:"[^"]*"|'[^']*'|[^;\s]+)\s*;\s*|set\s+"?[\w.]+=[^&]*&&\s*|[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S+)\s+)/i;
+  const lead = /^(?:\$(?:env:)?[\w.]+\s*=\s*(?:"[^"]*"|'[^']*'|[^;\s]+)\s*;\s*|&\s+|set\s+"?[\w.]+=[^&]*&&\s*|[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S+)\s+)/i;
   for (let i = 0; i < 20 && lead.test(s); i++) s = s.replace(lead, "").trim();
   return s || (name || "").trim() || "job";
 }

@@ -61,7 +61,10 @@ li { margin-bottom: 4px; }
 .error { color: var(--bad); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: 14px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; }
+/* Long words (paths, PC names) break instead of pushing out of their box. */
+.break { overflow-wrap: anywhere; }
+.one-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .center-screen { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; }
 
 /* Buttons */
@@ -87,8 +90,8 @@ li { margin-bottom: 4px; }
 .btn + .btn { margin-left: 0; }
 
 /* Cards */
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; overflow-wrap: break-word; }
+.card-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 10px; margin-bottom: 12px; }
 .callout { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 13px; max-width: 90%; }
 .pill { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
@@ -107,7 +110,8 @@ li { margin-bottom: 4px; }
 /* Copyable command */
 .copybox { margin: 8px 0 12px; }
 .copybox-row { display: flex; gap: 8px; align-items: center; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 6px 12px; }
-.copybox-row code { flex: 1; background: none; padding: 0; overflow-x: auto; white-space: nowrap; }
+.copybox-row code { flex: 1; min-width: 0; background: none; padding: 0; overflow-x: auto; white-space: nowrap; }
+.copybox-row .btn { flex-shrink: 0; }
 .snippet { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; max-height: 220px; overflow: auto; }
 
 /* Status dots */
@@ -118,9 +122,13 @@ li { margin-bottom: 4px; }
 .status-line { font-size: 15px; font-weight: 500; }
 
 /* Memory bars */
-.memcompare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 640px) { .memcompare { grid-template-columns: 1fr; } }
-.membar-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 5px; }
+.memcompare { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
+.membar-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; font-size: 13px; margin-bottom: 5px; }
+.membar-head > strong { white-space: nowrap; }
+.membar-head > .one-line { flex: 1; }
+.membar-head > span { white-space: nowrap; }
+.sync-row + .sync-row, .sync-row + p, p + .sync-row { margin-top: 10px; }
+.sync-row .muted { margin-top: 5px; }
 .membar-track { height: 10px; background: var(--panel-2); border-radius: 999px; overflow: hidden; flex: 1; }
 .membar-fill { height: 100%; border-radius: 999px; transition: width 0.4s; }
 .membar-fill.good { background: var(--good); }
@@ -128,13 +136,14 @@ li { margin-bottom: 4px; }
 .membar-fill.bad { background: var(--bad); }
 .membar .muted { margin-top: 5px; }
 .meter { display: grid; grid-template-columns: 46px 1fr auto; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 8px; }
+.meter > span:last-child { white-space: nowrap; }
 .job-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .job-line .btn { margin-left: auto; flex-shrink: 0; }
 .job-line .spinner { flex-shrink: 0; }
 /* Long commands stay on one line inside the card; the full command is in the tooltip. */
 .job-line .job-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-line .job-time { flex-shrink: 0; white-space: nowrap; }
-.job-cell { max-width: 420px; overflow-wrap: anywhere; }
+.job-cell .pill { margin: 0 6px 0 0; }
 
 /* Switch (checkbox styled as toggle) */
 .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 4px 0; user-select: none; }
@@ -145,17 +154,19 @@ li { margin-bottom: 4px; }
 
 /* App shell */
 .shell { display: flex; flex-direction: column; height: 100%; }
-.topnav { display: flex; align-items: center; gap: 18px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.topnav { white-space: nowrap; display: flex; align-items: center; gap: 18px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 .logo { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font-size: 15px; }
-.tabs { display: flex; gap: 4px; flex: 1; }
+.tabs { display: flex; gap: 4px; flex: 1; min-width: 0; }
 .tab { appearance: none; border: none; background: none; color: var(--muted); font: inherit; font-weight: 500; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
 .tab:hover { color: var(--text); background: var(--panel-2); }
 .tab.active { color: var(--text); background: var(--accent-soft); }
 .page { flex: 1; overflow: auto; padding: 20px; max-width: 1040px; width: 100%; margin: 0 auto; }
 
 /* Tables */
-table.jobs { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* Fixed columns: the job name gets the space that is left and ends in “…” (full command in the tooltip). */
+table.jobs { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+table.jobs th, table.jobs td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.jobs th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 table.jobs td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 table.jobs tr:last-child td { border-bottom: none; }
@@ -194,7 +205,8 @@ table.jobs td.actions .btn { margin-left: 4px; }
 /* Lists & options */
 .folder-list, .tool-list, .changes, .diag { list-style: none; padding: 0; }
 .folder-list li, .tool-list li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.folder-list li .btn { margin-left: auto; }
+.folder-list li .btn { margin-left: auto; flex-shrink: 0; }
+.folder-info { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .folder-list li:last-child, .tool-list li:last-child { border-bottom: none; }
 .program-list li { align-items: flex-start; }
 .program-info { flex: 1; min-width: 0; }
@@ -238,6 +250,12 @@ table.jobs td.actions .btn { margin-left: 4px; }
 
 .plain-list { list-style: none; padding: 0; margin: 0 0 12px; }
 .plain-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border, rgba(0,0,0,0.08)); }
-.plain-list li .btn { margin-left: auto; }
+.plain-list li .btn { margin-left: auto; flex-shrink: 0; }
+.plain-list li > strong { min-width: 0; overflow-wrap: anywhere; }
 
 .checking { display: flex; align-items: center; gap: 8px; }
+
+/* A collapsible option: title on top, its text underneath (not side by side). */
+details.option { display: block; }
+details.option > summary { cursor: pointer; }
+details.option[open] > summary { margin-bottom: 8px; }

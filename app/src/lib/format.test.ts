@@ -7,7 +7,7 @@ describe("format helpers", () => {
     expect(gb(undefined)).toBe("–");
   });
   it("formats durations in plain words", () => {
-    expect(duration(0.3)).toBe("under a second");
+    expect(duration(0.3)).toBe("under 1 s");
     expect(duration(42)).toBe("42 s");
     expect(duration(125)).toBe("2 min 5 s");
     expect(duration(3 * 3600 + 60)).toBe("3 h 1 min");
@@ -49,6 +49,7 @@ describe("format helpers", () => {
     expect(jobLabel("set FOO=1 && npm test")).toBe("npm test");
     expect(jobLabel("ffmpeg -i a.mov b.mp4")).toBe("ffmpeg -i a.mov b.mp4");
     expect(jobLabel('$env:A="x";')).toBe('$env:A="x";');
+    expect(jobLabel('$d="$env:LOCALAPPDATA\\Tools\\x"; & "$d\\render.exe" --out a.mp4')).toBe('"$d\\render.exe" --out a.mp4');
     expect(jobLabel("")).toBe("job");
   });
 });
