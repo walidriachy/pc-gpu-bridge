@@ -801,11 +801,33 @@ pub async fn win_status() -> Result<Value, String> {
     blocking(|| {
         let ws = load_state();
         let c = local_client();
-        let status = c.as_ref().and_then(|c| c.status().ok());
-        let gpu = c.as_ref().and_then(|c| c.gpu().ok());
-        let jobs = c.as_ref().and_then(|c| c.jobs().ok());
+        let c = c.as_ref();
+        // All four at once: one after another, a slow one (nvidia-smi while the GPU is busy) made
+        // the whole page wait.
+        let (status, gpu, jobs, tailscale) = std::thread::scope(|s| {
+            let status = s.spawn(|| c.and_then(|c| c.status().ok()));
+            let gpu = s.spawn(|| c.and_then(|c| c.gpu().ok()));
+            let jobs = s.spawn(|| c.and_then(|c| c.jobs().ok()));
+            let tailscale = s.spawn(tailscale_status);
+            (
+                status.join().ok().flatten(),
+                gpu.join().ok().flatten(),
+                jobs.join().ok().flatten(),
+                tailscale.join().unwrap_or(Value::Null),
+            )
+        });
         Ok(json!({"agent_running": status.is_some(), "status": status, "gpu": gpu, "jobs": jobs, "root": ws.root,
-                  "tailscale": tailscale_status()}))
+                  "tailscale": tailscale}))
+    })
+    .await
+}
+
+/// Just the PC's job list, for the Jobs page (no GPU, Tailscale or status checks to wait for).
+#[tauri::command]
+pub async fn win_jobs() -> Result<Value, String> {
+    blocking(|| {
+        let c = local_client().ok_or("PC Bridge helper isn't set up yet")?;
+        c.jobs().map_err(friendly_error)
     })
     .await
 }

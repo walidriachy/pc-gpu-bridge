@@ -341,3 +341,21 @@ def test_files_check_lists_missing_and_different(env):
     assert r.status_code == 200
     assert r.json()["missing"] == ["workspace/p/a.txt", "workspace/p/b.txt"]
     assert c.get("/files/stat", params={"path": "workspace/p/a.txt"}).json()["mtime"] == 1700000000
+
+
+def test_status_answers_at_once_while_program_checks_are_slow(env, monkeypatch):
+    """A slow program check (PyTorch while a job keeps the PC busy) must not hold up /status."""
+    import time as _time
+
+    from pcbridge_agent import app as app_mod
+    from pcbridge_agent import programs
+
+    # One event loop for all requests, like the real server (uvicorn), so background work can run on.
+    with TestClient(env["app"], headers=env["client"].headers) as c:
+        assert c.get("/status").json()["ok"]  # first answer: checked fully
+        monkeypatch.setattr(app_mod, "SLOW_STATUS_S", 0.0)
+        monkeypatch.setattr(programs, "locate", lambda cmd: _time.sleep(0.5) or "")
+        start = _time.monotonic()
+        for _ in range(3):
+            assert c.get("/status").json()["ok"]
+        assert _time.monotonic() - start < 1.0

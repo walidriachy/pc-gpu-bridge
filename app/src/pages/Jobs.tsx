@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { usePoll } from "../lib/poll";
+import { Checking } from "./Status";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { api, errText, type Platform } from "../lib/api";
+import { api, type Platform } from "../lib/api";
 import { duration, jobLabel, timeAgo } from "../lib/format";
 import { Card } from "../components/ui";
 
@@ -19,34 +20,24 @@ function dirname(p: string): string {
 }
 
 export function Jobs({ platform }: { platform: Platform }) {
-  const [jobs, setJobs] = useState<any[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
-  const [err, setErr] = useState("");
-  const load = () => {
-    if (platform === "windows") {
-      api.winStatus().then((s) => setJobs(s.jobs || [])).catch((e) => setErr(errText(e)));
-    } else {
-      api
-        .jobsList()
-        .then((r) => {
-          setJobs(r.pc_jobs || []);
-          setHistory(r.history || []);
-        })
-        .catch((e) => setErr(errText(e)));
-    }
-  };
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 8000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { data, err, reload: load } = usePoll<{ jobs: any[]; history: any[] }>(
+    `jobs-${platform}`,
+    () =>
+      platform === "windows"
+        ? api.winJobs().then((jobs) => ({ jobs: jobs || [], history: [] }))
+        : api.jobsList().then((r) => ({ jobs: r.pc_jobs || [], history: r.history || [] })),
+    5000,
+  );
+  const jobs = data?.jobs || [];
+  const history = data?.history || [];
 
   return (
     <div className="stack">
       {err && <p className="error">{err}</p>}
       <Card title="Jobs on the PC" actions={<button className="btn small ghost" onClick={load}>Refresh</button>}>
-        {jobs.length === 0 ? (
+        {!data ? (
+          <Checking text="Loading jobs…" />
+        ) : jobs.length === 0 ? (
           <p className="muted">No jobs yet. Ask Claude to encode a video or generate an image, and it will show up here.</p>
         ) : (
           <table className="jobs">

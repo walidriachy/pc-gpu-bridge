@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import platform
@@ -33,8 +34,15 @@ from .memory import memory_info
 from .pairing import PairingStore
 from .syncthing import Syncthing, SyncthingError, folder_id
 
+log = logging.getLogger(__name__)
+
 TOOLS = ("ffmpeg", "ffprobe", "python", "claude", "blender", "docker", "node", "npm", "pnpm", "ollama", "git")
 TORCH_CHECK_S = 60.0  # how long /status reuses its "is PyTorch installed?" answer
+# /status answers at once with the last known programs and cache size, and refreshes them in the
+# background when older than this. Checking them (starting Python to look for PyTorch, walking the
+# cache folder) can take many seconds while a big job keeps the PC busy, and the apps would then
+# take the slow answer for "the helper isn't running" and show red.
+SLOW_STATUS_S = 30.0
 COMFY_URL = "http://127.0.0.1:8188"
 COMFY_POLL_S = 1.0
 COMFY_STOP_WAIT_S = 30.0  # after a timeout or cancel, how long to wait for ComfyUI to let go of the GPU
@@ -323,13 +331,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         found["pytorch"] = bool(torch_seen["ok"])
         return found
 
+    slow: dict[str, Any] = {"at": -math.inf, "cache_bytes": 0, "tools": {}, "task": None}
+
+    async def refresh_slow() -> None:
+        try:
+            cache_bytes, tools = await asyncio.to_thread(lambda: (cache.size(), tools_present()))
+            slow.update(cache_bytes=cache_bytes, tools=tools, at=time.monotonic())
+        except Exception as exc:  # noqa: BLE001 - keep the last answer; try again next time
+            log.warning("status refresh failed: %s", exc)
+            slow["at"] = time.monotonic()
+
+    async def slow_status() -> tuple[int, dict[str, bool]]:
+        if slow["at"] == -math.inf:
+            await refresh_slow()  # the very first answer has nothing to fall back on
+        elif time.monotonic() - slow["at"] > SLOW_STATUS_S and not (slow["task"] and not slow["task"].done()):
+            slow["task"] = asyncio.create_task(refresh_slow())
+        return slow["cache_bytes"], slow["tools"]
+
     @app.get("/status", dependencies=[Depends(auth)])
     async def status():
         running = [queue.jobs[j].summary() for j in queue.running if j in queue.jobs]
-        # Disk and PATH lookups run in a worker thread so the agent keeps answering meanwhile.
-        cache_bytes, mem, tools = await asyncio.to_thread(
-            lambda: (cache.size(), memory_info(), tools_present())
-        )
+        mem = await asyncio.to_thread(memory_info)
+        cache_bytes, tools = await slow_status()
         return {
             "ok": True,
             "hostname": socket.gethostname(),
@@ -462,6 +485,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/programs/install", dependencies=[Depends(auth)])
     async def programs_install(req: InstallRequest):
+        slow["at"] = min(slow["at"], 0.0)  # report the new program soon after it lands
         prog = programs.lookup(req.program)
         if not prog:
             known = ", ".join(programs.CATALOG)

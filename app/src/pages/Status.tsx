@@ -1,27 +1,12 @@
 import { useEffect, useState } from "react";
+import { usePoll } from "../lib/poll";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errText, type Platform } from "../lib/api";
 import { duration, gb, jobLabel } from "../lib/format";
 import { Card, Dot, MemoryCompare } from "../components/ui";
 
-function usePoll<T>(fn: () => Promise<T>, ms: number): [T | null, string] {
-  const [data, setData] = useState<T | null>(null);
-  const [err, setErr] = useState("");
-  useEffect(() => {
-    let alive = true;
-    const tick = () =>
-      fn()
-        .then((d) => alive && (setData(d), setErr("")))
-        .catch((e) => alive && setErr(errText(e)));
-    tick();
-    const t = setInterval(tick, ms);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return [data, err];
+export function Checking({ text }: { text: string }) {
+  return <p className="muted checking"><span className="spinner" /> {text}</p>;
 }
 
 function GpuCard({ gpu }: { gpu: any }) {
@@ -103,7 +88,7 @@ function WhatsNewCard() {
 }
 
 function OpenSessionsCard() {
-  const [s] = usePoll(() => api.staleClaudeSessions(), 30000);
+  const { data: s } = usePoll("stale-sessions", () => api.staleClaudeSessions(), 30000);
   if (!s || (s.code === 0 && !s.desktop)) return null;
   const parts = [
     s.code > 0 ? `${s.code} Claude Code session${s.code === 1 ? " was" : "s were"}` : "",
@@ -130,13 +115,13 @@ function VersionNote({ pcVersion, macVersion }: { pcVersion?: string; macVersion
 }
 
 function MacStatus() {
-  const [s] = usePoll(() => api.statusSnapshot(), 5000);
+  const { data: s } = usePoll("mac-status", () => api.statusSnapshot(), 5000, (d) => d.reachable);
   const [macVersion, setMacVersion] = useState("");
   useEffect(() => {
     api.appInfo().then((i) => setMacVersion(i.version)).catch(() => {});
   }, []);
   const [msg, setMsg] = useState("");
-  if (!s) return <p className="muted">Checking your PC…</p>;
+  if (!s) return <Checking text="Checking your PC…" />;
   const refused = s.error_kind === "unauthorized";
   const color = s.reachable ? "green" : s.paired && !refused ? "yellow" : "red";
   const label = s.reachable
@@ -177,8 +162,8 @@ function MacStatus() {
 }
 
 function WinStatus() {
-  const [s] = usePoll(() => api.winStatus(), 5000);
-  if (!s) return <p className="muted">Checking…</p>;
+  const { data: s } = usePoll("win-status", () => api.winStatus(), 5000, (d) => d.agent_running && d.tailscale?.running);
+  if (!s) return <Checking text="Checking this PC…" />;
   const ok = s.agent_running && s.tailscale?.running;
   return (
     <div className="grid">

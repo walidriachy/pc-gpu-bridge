@@ -765,9 +765,18 @@ pub async fn status_snapshot() -> Result<Value, String> {
         let cfg = BridgeConfig::load();
         let mac = memory::local_memory();
         let c = client(&cfg);
-        let pc = c.as_ref().map(|c| c.status());
-        if let (Some(c), Some(Ok(_))) = (c.as_ref(), pc.as_ref()) {
-            let _ = c.post_json("/peer/memory", &json!(mac));
+        // Status, GPU and copy progress at once, so one slow answer doesn't hold up the page.
+        let (pc, gpu, sync) = std::thread::scope(|s| {
+            let pc = s.spawn(|| c.as_ref().map(|c| c.status()));
+            let gpu = s.spawn(|| c.as_ref().and_then(|c| c.gpu().ok()));
+            let sync = s.spawn(|| sync_progress(&cfg));
+            (pc.join().ok().flatten(), gpu.join().ok().flatten(), sync.join().unwrap_or(json!([])))
+        });
+        if let (Some(c), Some(Ok(_))) = (c.clone(), pc.as_ref()) {
+            let mac = mac.clone();
+            std::thread::spawn(move || {
+                let _ = c.post_json("/peer/memory", &json!(mac));
+            });
         }
         let (reachable, pc_status, err, kind) = match pc {
             Some(Ok(s)) => (true, s, Value::Null, "ok"),
@@ -777,7 +786,7 @@ pub async fn status_snapshot() -> Result<Value, String> {
             Some(Err(e)) => (false, Value::Null, json!(e.to_string()), "unreachable"),
             None => (false, Value::Null, json!("not paired"), "not_paired"),
         };
-        let gpu = if reachable { c.as_ref().and_then(|c| c.gpu().ok()).unwrap_or(Value::Null) } else { Value::Null };
+        let gpu = if reachable { gpu.unwrap_or(Value::Null) } else { Value::Null };
         Ok(json!({
             "paired": cfg.is_paired(),
             "reachable": reachable,
@@ -789,7 +798,7 @@ pub async fn status_snapshot() -> Result<Value, String> {
             "pc": pc_status,
             "gpu": gpu,
             "shared_folders": cfg.shared_folders,
-            "sync": sync_progress(&cfg),
+            "sync": sync,
         }))
     })
     .await

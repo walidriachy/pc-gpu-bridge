@@ -5,6 +5,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ## [Unreleased]
 
 ### Fixed
+- **The PC's status flipped to red and back while a job was running.** When the app asked the PC Bridge helper how it was doing, the helper re-checked every installed program first, including starting Python to look for PyTorch. With a big job keeping the PC busy this could take longer than the app waited, so it showed "helper isn't running" for a moment. The helper now answers at once and re-checks programs in the background, and the apps only show a problem after it lasts about 15 seconds.
+- **Status and Jobs took long to load.** The apps now ask for the PC's status, graphics card, jobs and Tailscale at the same time instead of one after another, the Jobs page on the PC asks only for the job list, and coming back to a tab shows what it showed last while a fresh answer loads. "Checking…" and "Loading jobs…" now show a spinner.
 - **A long job name ran out of the "Right now" box.** Jobs now show a short name without the setup in front (`$env:…=…;`), long names end in "…" inside the box, and the full command shows when you point at it. The Jobs list uses the same short name.
 
 ## [0.1.8] — 2026-11-23

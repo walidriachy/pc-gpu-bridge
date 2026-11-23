@@ -124,5 +124,6 @@ export const api = {
     invoke<{ available: boolean; current: string; version?: string; waiting?: string }>("check_for_update", { install }),
   winRestartHelper: () => invoke<{ ok: boolean; version: string }>("win_restart_helper"),
   winStatus: () => invoke<any>("win_status"),
+  winJobs: () => invoke<any[]>("win_jobs"),
   diagnosticsWin: () => invoke<Check[]>("run_diagnostics_win"),
 };

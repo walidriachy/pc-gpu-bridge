@@ -177,6 +177,7 @@ fn run_gui(minimized: bool) {
             win::win_power,
             win::win_set_autostart,
             win::win_status,
+            win::win_jobs,
             win::run_diagnostics_win,
         ])
         .build(tauri::generate_context!())
