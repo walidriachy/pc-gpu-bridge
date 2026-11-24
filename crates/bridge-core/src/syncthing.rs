@@ -8,15 +8,46 @@ use std::time::Duration;
 
 pub const API_ADDR: &str = "127.0.0.1:8385";
 /// Never synced. `.git`: two computers writing one repository at once can corrupt it.
-/// `.claude`: each computer's own Claude Code settings and session state.
-pub const IGNORES: &[&str] =
-    &["node_modules", ".next", ".venv", "__pycache__", "(?d).DS_Store", "*.pcbridge-part", ".git", ".claude"];
-/// Seconds Syncthing waits after a change before sending it (its default is 10).
-pub const WATCH_DELAY_S: u64 = 2;
+/// `.claude`: each computer's own Claude Code settings and session state. The rest are build
+/// leftovers that Xcode, Swift, Android Studio, CocoaPods and Turbo rebuild on their own: each build
+/// rewrote thousands of them, which kept Syncthing checking files around the clock.
+/// Must match agent/pcbridge_agent/syncthing.py:DEFAULT_IGNORES.
+pub const IGNORES: &[&str] = &[
+    "node_modules",
+    ".next",
+    ".venv",
+    "__pycache__",
+    "(?d).DS_Store",
+    "*.pcbridge-part",
+    ".git",
+    ".claude",
+    ".build",
+    "DerivedData",
+    "ios/build",
+    "ios/Pods",
+    "android/build",
+    "android/**/build",
+    ".gradle",
+    ".kotlin",
+    ".cxx",
+    ".turbo",
+    ".expo",
+    "xcuserdata",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+];
+/// Seconds Syncthing waits after a change before sending it (its default). Builds and renders
+/// change thousands of files in bursts; at 2 s Syncthing re-scanned after every burst. Jobs don't
+/// wait for this: before a job runs, PC Bridge sends any input the PC doesn't have yet.
+pub const WATCH_DELAY_S: u64 = 10;
 /// Full rescans, as a safety net only: the file watcher reports changes as they happen. Rescanning
 /// a big folder (100+ GB, ~1 million files) every minute kept both computers busy re-checking
-/// files instead of copying new ones.
-pub const RESCAN_S: u64 = 3600;
+/// files instead of copying new ones; hourly still left it scanning most of the day on ~400,000 files.
+pub const RESCAN_S: u64 = 6 * 3600;
+/// Most processor cores Syncthing may use at once (it otherwise takes every core while it checks
+/// a big folder). Syncthing already runs at low priority; this also caps how much it can take.
+pub const MAX_CORES: &str = "2";
 /// Small files first: code, configs and scripts reach the PC long before big videos, so a job
 /// can start while large media is still copying (Syncthing's default order is random).
 pub const PULL_ORDER: &str = "smallestFirst";
@@ -184,6 +215,7 @@ pub fn start(bin: &Path, data_home: &Path, api_key: &str) -> Result<Child, Strin
         .arg(format!("--gui-apikey={api_key}"))
         .arg(format!("--logfile={}", data_home.with_file_name("syncthing.log").display()))
         .env("STNOUPGRADE", "1")
+        .env("GOMAXPROCS", MAX_CORES)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -197,5 +229,15 @@ mod tests {
         // Must match agent/pcbridge_agent/syncthing.py:folder_id
         assert_eq!(super::folder_id("My Videos"), "pcbridge-my-videos");
         assert_eq!(super::folder_id("???"), "pcbridge-shared");
+    }
+
+    #[test]
+    fn ignores_match_agent() {
+        let py = include_str!("../../../agent/pcbridge_agent/syncthing.py");
+        let start = py.find("DEFAULT_IGNORES = [").unwrap();
+        let block = &py[start..start + py[start..].find("\n]").unwrap()];
+        let agent: Vec<&str> =
+            block.lines().skip(1).filter_map(|l| l.trim().strip_prefix('"')?.split('"').next()).collect();
+        assert_eq!(agent, super::IGNORES);
     }
 }

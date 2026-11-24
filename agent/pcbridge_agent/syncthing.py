@@ -20,15 +20,34 @@ DEFAULT_IGNORES = [
     "*.pcbridge-part",
     ".git",  # two computers writing one Git repo at once can corrupt it
     ".claude",  # each computer's own Claude Code settings and session state
+    # Build leftovers Xcode, Swift, Android Studio, CocoaPods and Turbo rebuild on their own: each
+    # build rewrote thousands of them, which kept Syncthing checking files around the clock.
+    ".build",
+    "DerivedData",
+    "ios/build",
+    "ios/Pods",
+    "android/build",
+    "android/**/build",
+    ".gradle",
+    ".kotlin",
+    ".cxx",
+    ".turbo",
+    ".expo",
+    "xcuserdata",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
 ]
 
 # Overwritten or deleted files go to the folder's .stversions bin for 14 days instead of vanishing.
 VERSIONING = {"type": "trashcan", "params": {"cleanoutDays": "14"}}
-# Seconds Syncthing waits after a change before sending it (its default is 10).
-WATCH_DELAY_S = 2
+# Seconds Syncthing waits after a change before sending it (its default). Builds and renders change
+# thousands of files in bursts; at 2 s Syncthing re-scanned after every burst. Jobs don't wait for
+# this: the Mac sends any input the PC doesn't have yet before a job runs.
+WATCH_DELAY_S = 10
 # Full rescans are only a safety net (the file watcher reports changes as they happen). Every
 # minute on a 100+ GB folder kept the PC re-checking files instead of copying new ones.
-RESCAN_S = 3600
+RESCAN_S = 6 * 3600
 # Code and scripts (small) reach the PC before big videos, so jobs can start sooner.
 PULL_ORDER = "smallestFirst"
 

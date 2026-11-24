@@ -516,6 +516,7 @@ pub fn start_services(state: &AppState) -> Result<(), String> {
                 .arg(format!("--home={}", home.display()))
                 .arg(format!("--gui-address={}", bridge_core::syncthing::API_ADDR))
                 .arg(format!("--gui-apikey={}", ws.syncthing_api_key))
+                .env("GOMAXPROCS", bridge_core::syncthing::MAX_CORES)
                 .spawn()
                 .map_err(|e| format!("Couldn't start Syncthing: {e}"))?;
             procs.syncthing = Some(child);

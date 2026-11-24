@@ -7,9 +7,44 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// Folders a job's folder scan skips: never synced, or Syncthing's own.
-const SKIP_DIRS: &[&str] =
-    &["node_modules", ".next", ".venv", "__pycache__", ".git", ".claude", ".stversions", ".stfolder"];
+/// Folders a job's folder scan skips: never synced (see `syncthing::IGNORES`), or Syncthing's own.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    ".next",
+    ".venv",
+    "__pycache__",
+    ".git",
+    ".claude",
+    ".stversions",
+    ".stfolder",
+    ".build",
+    "DerivedData",
+    ".gradle",
+    ".kotlin",
+    ".cxx",
+    ".turbo",
+    ".expo",
+    "xcuserdata",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+];
+
+/// A folder the job scan leaves out: the names above, plus the build output of iOS and Android
+/// projects (`ios/build`, `ios/Pods`, `android/…/build`), which isn't synced either.
+fn skip_dir(path: &Path, name: &str) -> bool {
+    if SKIP_DIRS.contains(&name) || name.to_ascii_lowercase().ends_with(".app") {
+        return true;
+    }
+    let parent = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str());
+    match name {
+        "Pods" => parent == Some("ios"),
+        "build" => {
+            parent == Some("ios") || path.parent().is_some_and(|p| p.components().any(|c| c.as_os_str() == "android"))
+        }
+        _ => false,
+    }
+}
 /// Above this many files the folder is too big to compare before every job; only the files named
 /// in the command are checked then (as before).
 pub const MAX_SCAN_FILES: usize = 30_000;
@@ -87,8 +122,9 @@ pub fn scan_folder(dir: &Path) -> FolderScan {
                 windows = true;
             }
             if meta.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) && !(name.to_ascii_lowercase().ends_with(".app")) {
-                    stack.push(e.path());
+                let path = e.path();
+                if !skip_dir(&path, &name) {
+                    stack.push(path);
                 }
                 continue;
             }
@@ -268,6 +304,21 @@ pub fn human_bytes(b: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn skips_build_leftovers_like_syncthing() {
+        use std::path::Path;
+        let skip = |p: &str| super::skip_dir(Path::new(p), Path::new(p).file_name().unwrap().to_str().unwrap());
+        assert!(skip("/w/app/.build"));
+        assert!(skip("/w/app/ios/Pods"));
+        assert!(skip("/w/app/ios/build"));
+        assert!(skip("/w/app/android/build"));
+        assert!(skip("/w/app/android/app/build"));
+        assert!(skip("/w/app/.turbo"));
+        assert!(!skip("/w/site/build"));
+        assert!(!skip("/w/site/Pods"));
+        assert!(!skip("/w/video/work"));
+    }
+
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
