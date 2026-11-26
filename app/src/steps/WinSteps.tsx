@@ -36,11 +36,11 @@ function Welcome({ setDone }: StepCtx) {
       </div>
       <h3>Programs this setup installs (with your OK at each step)</h3>
       <ul>
-        <li><strong>Tailscale</strong> — private, encrypted connection to your Mac</li>
-        <li><strong>FFmpeg</strong> — video tool that can use your NVIDIA card</li>
-        <li><strong>Python</strong> — runs the PC Bridge helper and AI scripts</li>
-        <li><strong>Syncthing</strong> — keeps shared folders identical on both computers</li>
-        <li><strong>Claude Code</strong> — a “worker Claude” that can do whole tasks on this PC</li>
+        <li><strong>Tailscale</strong> · private, encrypted connection to your Mac</li>
+        <li><strong>FFmpeg</strong> · video tool that can use your NVIDIA card</li>
+        <li><strong>Python</strong> · runs the PC Bridge helper and AI scripts</li>
+        <li><strong>Syncthing</strong> · keeps shared folders identical on both computers</li>
+        <li><strong>Claude Code</strong> · a “worker Claude” that can do whole tasks on this PC</li>
         <li>Optional: <strong>Ollama</strong> (local AI chat models), <strong>PyTorch</strong> (AI in Python) and <strong>ComfyUI</strong> (image/video generation)</li>
       </ul>
     </div>
@@ -57,10 +57,10 @@ function GpuStep({ setDone }: StepCtx) {
         setState({ status: "fail", message: "No NVIDIA driver found.", fix: "Click “Get the NVIDIA driver”, install the NVIDIA App or the latest Game Ready / Studio driver, restart the PC, then click “Check again”." });
         setDone(false);
       } else if (!g.driver_ok) {
-        setState({ status: "fail", message: `Found ${g.name}, but the driver (${g.driver}) is old.`, fix: "Update the driver with “Get the NVIDIA driver” — newer drivers make video encoding and AI tools work properly. You can also continue and update later." });
+        setState({ status: "fail", message: `Found ${g.name}, but the driver (${g.driver}) is old.`, fix: "Update the driver with “Get the NVIDIA driver”. Newer drivers make video encoding and AI tools work properly. You can also continue and update later." });
         setDone(true);
       } else {
-        setState({ status: "ok", message: `${g.name} with ${(g.vram_mb / 1024).toFixed(0)} GB of video memory — driver ${g.driver}.` });
+        setState({ status: "ok", message: `${g.name} with ${(g.vram_mb / 1024).toFixed(0)} GB of video memory · driver ${g.driver}.` });
         setDone(true);
       }
     } catch (e) {
@@ -105,7 +105,7 @@ function TailscaleStep({ setDone }: StepCtx) {
   }, []);
   return (
     <div className="prose">
-      <button className="btn primary big" onClick={async () => { await install.run(() => api.winInstall("tailscale"), "Installing Tailscale (Windows may ask “Do you want to allow…?” — click Yes)…"); check(); }}>Do it for me</button>
+      <button className="btn primary big" onClick={async () => { await install.run(() => api.winInstall("tailscale"), "Installing Tailscale (Windows may ask “Do you want to allow…?”, click Yes)…"); check(); }}>Do it for me</button>
       <CheckResult state={install.state} okText="Tailscale installed" />
       <ol>
         <li>After installing, click <strong>Open Tailscale to sign in</strong>. A browser window opens.</li>
@@ -165,12 +165,12 @@ function ToolsStep({ setDone }: StepCtx) {
       <ul className="tool-list">
         {TOOLS.map((t) => (
           <li key={t.id}>
-            <strong>{t.name}</strong> — {t.desc}
+            <strong>{t.name}</strong> · {t.desc}
             <CheckResult state={status[t.id] || { status: "idle" }} />
           </li>
         ))}
         <li>
-          <strong>PC Bridge helper</strong> — receives jobs from your Mac
+          <strong>PC Bridge helper</strong> · receives jobs from your Mac
           <CheckResult state={agent.state.status === "ok" ? { status: "ok", message: "Running in the background" } : agent.state} />
         </li>
       </ul>
@@ -202,7 +202,7 @@ function ClaudeStep({ setDone }: StepCtx) {
       <CheckResult state={install.state} okText="Claude Code installed" />
       <ol>
         <li>Click <strong>Log in</strong>. A black window opens and starts Claude Code.</li>
-        <li>Follow its instructions — your browser opens so you can sign in to your Claude account.</li>
+        <li>Follow its instructions. Your browser opens so you can sign in to your Claude account.</li>
         <li>When it says you're logged in, close the black window and click <strong>Check again</strong>.</li>
       </ol>
       <div className="row">
@@ -233,7 +233,7 @@ function PytorchOption({ checked, onChange }: { checked: boolean; onChange: (v: 
     <div className="option">
       <label className="check-row">
         <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-        <span><strong>PyTorch (GPU)</strong> — needed for AI in Python, like Whisper (speech to text) and Stable Diffusion. It's big ({sizeText(p?.size_gb ?? 6)}).</span>
+        <span><strong>PyTorch (GPU)</strong> · needed for AI in Python, like Whisper (speech to text) and Stable Diffusion. It's big ({sizeText(p?.size_gb ?? 6)}).</span>
       </label>
       {checked && (
         <div>
@@ -248,7 +248,7 @@ function PytorchOption({ checked, onChange }: { checked: boolean; onChange: (v: 
                 <p className={roomy ? "muted small" : "advice"}>
                   {roomy
                     ? `Free space on the ${driveName(info.drive)} drive: ${info.free_gb >= 0 ? `${info.free_gb} GB` : "unknown"} (needs about ${spaceNeededGb(p.size_gb)} GB).`
-                    : `⚠️ Not enough free space: ${info.free_gb} GB free on the ${driveName(info.drive)} drive, about ${spaceNeededGb(p.size_gb)} GB needed. Free up space in Windows Settings → System → Storage, then come back.`}
+                    : `Not enough free space: ${info.free_gb} GB free on the ${driveName(info.drive)} drive, about ${spaceNeededGb(p.size_gb)} GB needed. Free up space in Windows Settings → System → Storage, then come back.`}
                 </p>
               )}
               <InstallStatus state={torch.states.pytorch} />
@@ -275,7 +275,7 @@ function OptionalStep({ setDone }: StepCtx) {
       <div className="option">
         <label className="check-row">
           <input type="checkbox" checked={ws.want_ollama} onChange={(e) => save({ ...ws, want_ollama: e.target.checked })} />
-          <span><strong>Ollama</strong> — runs AI chat models (like Llama or Qwen) on your graphics card, privately, with no internet needed once downloaded. Claude can ask them questions.</span>
+          <span><strong>Ollama</strong> · runs AI chat models (like Llama or Qwen) on your graphics card, privately, with no internet needed once downloaded. Claude can ask them questions.</span>
         </label>
         {ws.want_ollama && (
           <>
@@ -288,7 +288,7 @@ function OptionalStep({ setDone }: StepCtx) {
       <div className="option">
         <label className="check-row">
           <input type="checkbox" checked={ws.want_comfy} onChange={(e) => save({ ...ws, want_comfy: e.target.checked })} />
-          <span><strong>ComfyUI</strong> — creates images and videos with AI models (like Stable Diffusion / Flux). Claude can send it image requests.</span>
+          <span><strong>ComfyUI</strong> · creates images and videos with AI models (like Stable Diffusion / Flux). Claude can send it image requests.</span>
         </label>
         {ws.want_comfy && (
           <div>
@@ -299,7 +299,7 @@ function OptionalStep({ setDone }: StepCtx) {
       </div>
       <details className="option">
         <summary><strong>Advanced:</strong> run AI tools inside WSL2 (Linux on Windows)</summary>
-        <p className="muted">Some AI tools run better on Linux. WSL2 lets Windows run Ubuntu with full access to your graphics card. Most people don't need this — leave it off unless a tool asks for Linux.</p>
+        <p className="muted">Some AI tools run better on Linux. WSL2 lets Windows run Ubuntu with full access to your graphics card. Most people don't need this, so leave it off unless a tool asks for Linux.</p>
         <CopyBox command="wsl --install -d Ubuntu" explain="Paste into “Terminal (Admin)”: right-click the Start button → Terminal (Admin). It installs Ubuntu; restart when asked. Then use the AI tool's Linux instructions inside Ubuntu." />
       </details>
     </div>
@@ -313,7 +313,7 @@ function WolStep({ setDone }: StepCtx) {
     <div className="prose">
       <p><strong>Wake-on-LAN</strong> means your Mac can switch the PC on from sleep by sending a special “wake up” signal over your home network. The PC can then save power when idle.</p>
       <button className="btn primary big" onClick={async () => { const r = await wol.run(() => api.winConfigureWol(), "Changing the network card setting (click “Yes” on the Windows prompt)…"); if (r) { setRes(r); setDone(true); } }}>Do it for me</button>
-      <CheckResult state={wol.state.status === "ok" ? { status: "ok", message: `Turned on for “${res?.adapter}”. Windows “Fast startup” was also turned off so waking works.` } : { ...wol.state, fix: wol.state.status === "fail" ? "Wake-on-LAN needs the PC plugged in with an Ethernet cable. You can skip this — the PC then just needs to stay on." : undefined }} />
+      <CheckResult state={wol.state.status === "ok" ? { status: "ok", message: `Turned on for “${res?.adapter}”. Windows “Fast startup” was also turned off so waking works.` } : { ...wol.state, fix: wol.state.status === "fail" ? "Wake-on-LAN needs the PC plugged in with an Ethernet cable. You can skip this; the PC then just needs to stay on." : undefined }} />
       <details>
         <summary>Also check the BIOS setting (optional, needs a restart)</summary>
         <div className="bios">
@@ -336,7 +336,7 @@ function WolStep({ setDone }: StepCtx) {
             <li>Restart the PC. As soon as the screen lights up, tap <kbd>Delete</kbd> (or <kbd>F2</kbd>) repeatedly until the setup screen (BIOS) appears.</li>
             <li>Look for a menu called <strong>Power</strong>, <strong>APM</strong> or <strong>Advanced</strong>.</li>
             <li>Find <strong>Wake on LAN</strong>, <strong>Power On by PCI-E</strong> or <strong>Resume by LAN</strong> and set it to <strong>Enabled</strong>.</li>
-            <li>Press <kbd>F10</kbd> to save and exit. If you can't find it, don't worry — waking from sleep usually works without it.</li>
+            <li>Press <kbd>F10</kbd> to save and exit. If you can't find it, don't worry: waking from sleep usually works without it.</li>
           </ol>
         </div>
       </details>
@@ -397,11 +397,11 @@ function PairCodeStep({ setDone }: StepCtx) {
 export const winSteps: StepDef[] = [
   { id: "welcome", title: "Welcome to PC Bridge", what: "A quick look at what PC Bridge will do to this PC.", why: "So you know exactly what gets installed and where files go before anything happens.", body: (c) => <Welcome {...c} /> },
   { id: "gpu", title: "Check your graphics card", what: "Make sure your NVIDIA card and its driver are working.", why: "The graphics card (GPU) is what makes this PC fast at video and AI work; the driver is the software that lets programs use it.", body: (c) => <GpuStep {...c} /> },
-  { id: "tailscale", title: "Connect to your Mac privately", what: "Install Tailscale and sign in.", why: "Tailscale makes a private, encrypted link between this PC and your Mac — it works even when you're away from home, and nobody else can reach the PC through it.", body: (c) => <TailscaleStep {...c} /> },
+  { id: "tailscale", title: "Connect to your Mac privately", what: "Install Tailscale and sign in.", why: "Tailscale makes a private, encrypted link between this PC and your Mac. It works even when you're away from home, and nobody else can reach the PC through it.", body: (c) => <TailscaleStep {...c} /> },
   { id: "tools", title: "Install the tools", what: "Install FFmpeg, Python, Syncthing and the PC Bridge helper.", why: "These are the programs that actually do the work and keep your files in sync.", body: (c) => <ToolsStep {...c} /> },
   { id: "claude", title: "Set up the worker Claude", what: "Install Claude Code on this PC and log in.", why: "So Claude on your Mac can hand whole tasks to a Claude running right next to the graphics card.", optional: true, body: (c) => <ClaudeStep {...c} /> },
   { id: "optional", title: "Optional AI tools", what: "Choose whether to add local AI models.", why: "These are only needed if you want AI chat models or image generation running on your own PC. They're off by default.", optional: true, body: (c) => <OptionalStep {...c} /> },
   { id: "wol", title: "Wake-on-LAN", what: "Let your Mac wake this PC up when there's a job.", why: "So the PC can sleep (and save power) when idle, but still be there when you need it.", optional: true, body: (c) => <WolStep {...c} /> },
-  { id: "power", title: "Power settings", what: "Allow sleep, but wake up for jobs — and start with Windows.", why: "Keeps electricity costs down without you having to remember to switch anything on.", optional: true, body: (c) => <PowerStep {...c} /> },
-  { id: "pair", title: "Pair with your Mac", what: "Show the 6-digit code to type on your Mac.", why: "Pairing makes the two computers trust each other — only your Mac can send jobs here.", body: (c) => <PairCodeStep {...c} /> },
+  { id: "power", title: "Power settings", what: "Allow sleep, but wake up for jobs, and start with Windows.", why: "Keeps electricity costs down without you having to remember to switch anything on.", optional: true, body: (c) => <PowerStep {...c} /> },
+  { id: "pair", title: "Pair with your Mac", what: "Show the 6-digit code to type on your Mac.", why: "Pairing makes the two computers trust each other, so only your Mac can send jobs here.", body: (c) => <PairCodeStep {...c} /> },
 ];

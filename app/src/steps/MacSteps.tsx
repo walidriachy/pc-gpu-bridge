@@ -3,20 +3,20 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 import { api, errText } from "../lib/api";
 import { cleanCode, duration, speedup } from "../lib/format";
-import { CheckResult, useAction, type CheckState } from "../components/ui";
+import { CheckResult, Dot, Icon, useAction, type CheckState } from "../components/ui";
 import type { StepCtx, StepDef } from "../components/Wizard";
 
 function Welcome({ setDone }: StepCtx) {
   useEffect(() => setDone(true), [setDone]);
   return (
     <div className="prose">
-      <p>PC Bridge lets Claude on this Mac send heavy work — video encodes, AI image generation, big data jobs, large builds — to your Windows PC with its powerful graphics card. You keep working on the Mac; the PC does the heavy lifting and the results appear back in your folders.</p>
+      <p>PC Bridge lets Claude on this Mac send heavy work (video encodes, AI image generation, big data jobs, large builds) to your Windows PC with its powerful graphics card. You keep working on the Mac; the PC does the heavy lifting and the results appear back in your folders.</p>
       <h3>What this app will do on your Mac</h3>
       <ul>
-        <li>Help you install <strong>Tailscale</strong> — a free app that creates a private, encrypted connection between your two computers.</li>
+        <li>Help you install <strong>Tailscale</strong>, a free app that creates a private, encrypted connection between your two computers.</li>
         <li>Pair with your PC using a 6-digit code (no passwords or keys to copy).</li>
         <li>Keep the folders you choose in sync with the PC using <strong>Syncthing</strong> (stored in a hidden folder called <code>.pcbridge</code> in your home folder).</li>
-        <li>Connect Claude Code and Claude Desktop to PC Bridge — only after you've seen exactly what changes.</li>
+        <li>Connect Claude Code and Claude Desktop to PC Bridge, only after you've seen exactly what changes.</li>
       </ul>
       <p className="muted">Before you start: install PC Bridge on your Windows PC and get to its pairing-code screen. It's fine to do both at the same time.</p>
     </div>
@@ -56,9 +56,9 @@ function TailscaleStep({ setDone }: StepCtx) {
         Download Tailscale
       </button>
       <ol>
-        <li>Click <strong>Download Tailscale</strong>. Your browser opens the official Tailscale page — choose the Mac download (or the App Store).</li>
+        <li>Click <strong>Download Tailscale</strong>. Your browser opens the official Tailscale page. Choose the Mac download (or the App Store).</li>
         <li>Open the downloaded file and drag Tailscale to Applications, then open it.</li>
-        <li>Click the Tailscale icon in the menu bar (top of the screen) → <strong>Log in</strong>. Pick Google, Microsoft or Apple — <strong>use the same account on the PC</strong>.</li>
+        <li>Click the Tailscale icon in the menu bar (top of the screen) → <strong>Log in</strong>. Pick Google, Microsoft or Apple, and <strong>use the same account on the PC</strong>.</li>
         <li>If macOS asks to allow a “VPN configuration”, click <strong>Allow</strong>. (Tailscale only connects your own devices; it doesn't change your internet.)</li>
       </ol>
       <button className="btn" onClick={check}>Check again</button>
@@ -88,7 +88,7 @@ function PairStep({ setDone }: StepCtx) {
       <ol>
         <li>On the PC, finish the PC Bridge setup until you see a big <strong>6-digit code</strong>.</li>
         <li>Choose your PC below (it's listed because it's on your Tailscale network).</li>
-        <li>Type the code and click <strong>Pair</strong>. PC Bridge swaps a secret key automatically and saves it privately on this Mac — you never handle it.</li>
+        <li>Type the code and click <strong>Pair</strong>. PC Bridge swaps a secret key automatically and saves it privately on this Mac. You never handle it.</li>
       </ol>
       <label className="field">
         <span>Your PC</span>
@@ -134,18 +134,19 @@ function FoldersStep({ setDone }: StepCtx) {
   return (
     <div className="prose">
       <p><strong>Syncing</strong> means a folder exists on both computers and stays identical: add or change a file on one, and it appears on the other a moment later. Your PC keeps its copies inside <code>PCBridge\workspace\</code>.</p>
-      <p>Pick the folders where you keep the things the PC will work on — for example <em>Videos</em>, or a project folder. Avoid huge folders you don't need (like your whole home folder).</p>
-      <button className="btn" onClick={add}>+ Add folder…</button>
+      <p>Pick the folders where you keep the things the PC will work on, for example <em>Videos</em>, or a project folder. Avoid huge folders you don't need (like your whole home folder).</p>
+      <button className="btn" onClick={add}><Icon name="plus" size={14} /> Add folder…</button>
       <ul className="folder-list">
         {folders.map((f) => (
           <li key={f}>
-            <div className="folder-info">📁 {f}</div>
+            <Icon name="folder" size={18} />
+            <div className="folder-info">{f}</div>
             <button className="btn small ghost" onClick={() => setFolders((l) => l.filter((x) => x !== f))}>Remove</button>
           </li>
         ))}
       </ul>
       <button className="btn primary big" disabled={folders.length === 0} onClick={share}>Share these folders</button>
-      <CheckResult state={state.status === "ok" ? { status: "ok", message: `Sharing ${folders.length} folder(s). The first sync can take a while for big folders — you can keep going.` } : { ...state, fix: state.status === "fail" ? "Make sure the PC is on and paired (previous step), then try again." : undefined }} />
+      <CheckResult state={state.status === "ok" ? { status: "ok", message: `Sharing ${folders.length} folder(s). The first sync can take a while for big folders. You can keep going.` } : { ...state, fix: state.status === "fail" ? "Make sure the PC is on and paired (previous step), then try again." : undefined }} />
     </div>
   );
 }
@@ -168,7 +169,7 @@ function ClaudeStep({ setDone }: StepCtx) {
   };
   return (
     <div className="prose">
-      <p>This tells Claude (in Claude Code and the Claude Desktop app) that your PC exists and when to use it. Here is everything that will change — a backup copy of each file is kept.</p>
+      <p>This tells Claude (in Claude Code and the Claude Desktop app) that your PC exists and when to use it. Here is everything that will change. A backup copy of each file is kept.</p>
       <ul className="changes">
         {preview?.changes.map((c: any) => (
           <li key={c.what}>
@@ -230,7 +231,7 @@ function FinalTestStep({ setDone }: StepCtx) {
           <div><div className="big-num">~{duration(res.mac_est_secs)}</div><div className="muted">estimated on this Mac</div></div>
           <div><div className="big-num">{speedup(res.encode_secs, res.mac_est_secs)}</div><div className="muted">including the file transfer</div></div>
           <div className="span">
-            <button className="btn small" onClick={() => openPath(res.output)}>Open the test video</button>
+            <button className="btn small" onClick={() => openPath(res.output)}><Icon name="open" size={13} /> Open the test video</button>
             <p className="muted small">{res.gpu_python.ok ? `AI tools: ${res.gpu_python.text}` : res.gpu_python.text}</p>
           </div>
         </div>
@@ -245,8 +246,8 @@ function DoneStep({ setDone }: StepCtx) {
     <div className="prose">
       <h3>How it works day to day</h3>
       <ol className="bullets">
-        <li><strong>Just ask Claude.</strong> “Encode this video”, “generate 4 images”, “run the test suite” — Claude sends heavy work to the PC by itself.</li>
-        <li><strong>Watch the menu bar dot:</strong> 🟢 PC ready · 🟡 PC asleep (it will be woken) · 🔴 not connected.</li>
+        <li><strong>Just ask Claude.</strong> “Encode this video”, “generate 4 images”, “run the test suite”: Claude sends heavy work to the PC by itself.</li>
+        <li><strong>Watch the menu bar dot:</strong> <Dot color="green" />PC ready · <Dot color="yellow" />PC asleep (it will be woken) · <Dot color="red" />not connected.</li>
         <li><strong>Results come back by themselves</strong> into the same folder, usually within seconds of the job finishing.</li>
         <li><strong>Memory-smart:</strong> when your Mac is short on memory, or a job needs lots of it, PC Bridge sends it to the PC's memory. Apps you have open on the Mac still use the Mac's memory.</li>
         <li><strong>Never stuck:</strong> if the PC can't be reached, jobs run on the Mac instead and you get a notification. Use “Pause redirecting” in the menu bar any time.</li>
@@ -257,11 +258,11 @@ function DoneStep({ setDone }: StepCtx) {
 
 export const macSteps: StepDef[] = [
   { id: "welcome", title: "Welcome to PC Bridge", what: "A quick look at what PC Bridge will set up on this Mac.", why: "So you know exactly what changes before anything happens.", body: (c) => <Welcome {...c} /> },
-  { id: "tailscale", title: "Connect your computers privately", what: "Install Tailscale on this Mac and sign in.", why: "Tailscale creates a private, encrypted link between your Mac and PC that works at home and away — nobody else on the internet can reach your PC through it.", body: (c) => <TailscaleStep {...c} /> },
+  { id: "tailscale", title: "Connect your computers privately", what: "Install Tailscale on this Mac and sign in.", why: "Tailscale creates a private, encrypted link between your Mac and PC that works at home and away. Nobody else on the internet can reach your PC through it.", body: (c) => <TailscaleStep {...c} /> },
   { id: "pair", title: "Pair with your PC", what: "Enter the 6-digit code shown on your PC.", why: "Pairing makes your Mac and PC trust each other, so only your Mac can send jobs to your PC.", body: (c) => <PairStep {...c} /> },
   { id: "folders", title: "Choose folders to share", what: "Pick which Mac folders the PC can work on.", why: "The PC needs a copy of your files to work on them, and its results need to come back to you.", body: (c) => <FoldersStep {...c} /> },
   { id: "claude", title: "Connect to Claude", what: "Let Claude Code and Claude Desktop use your PC.", why: "This gives Claude new tools (like “run on PC”) and tells it which jobs belong on the PC. An “MCP connection” is simply how apps give Claude extra abilities.", body: (c) => <ClaudeStep {...c} /> },
-  { id: "network", title: "Check the connection speed", what: "Measure how fast files move between your Mac and PC.", why: "PC Bridge uses this to decide when sending a job is worth it — copying a huge file over slow Wi-Fi can take longer than doing the job on the Mac.", optional: true, body: (c) => <NetworkStep {...c} /> },
+  { id: "network", title: "Check the connection speed", what: "Measure how fast files move between your Mac and PC.", why: "PC Bridge uses this to decide when sending a job is worth it. Copying a huge file over slow Wi-Fi can take longer than doing the job on the Mac.", optional: true, body: (c) => <NetworkStep {...c} /> },
   { id: "test", title: "Final test", what: "Run a real job on your PC's graphics card.", why: "Proves everything works end-to-end and shows you how much time the PC saves.", optional: true, body: (c) => <FinalTestStep {...c} /> },
-  { id: "done", title: "You're done! 🎉", what: "PC Bridge is ready.", why: "Here's what to expect from now on.", body: (c) => <DoneStep {...c} /> },
+  { id: "done", title: "You're all set", what: "PC Bridge is ready.", why: "Here's what to expect from now on.", body: (c) => <DoneStep {...c} /> },
 ];

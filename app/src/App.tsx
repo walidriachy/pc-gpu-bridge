@@ -7,14 +7,82 @@ import { Status } from "./pages/Status";
 import { Jobs } from "./pages/Jobs";
 import { Settings } from "./pages/Settings";
 import { Help } from "./pages/Help";
+import { Dot, Icon, type IconName } from "./components/ui";
+import { usePoll } from "./lib/poll";
 
 type Tab = "status" | "jobs" | "settings" | "help";
-const TABS: [Tab, string][] = [
-  ["status", "Status"],
-  ["jobs", "Jobs"],
-  ["settings", "Settings"],
-  ["help", "Help"],
+const TABS: [Tab, string, IconName][] = [
+  ["status", "Status", "status"],
+  ["jobs", "Jobs", "jobs"],
+  ["settings", "Settings", "settings"],
+  ["help", "Help", "help"],
 ];
+
+type Link = { color: "green" | "yellow" | "red"; host: string; state: string };
+
+/** The connection shown in the sidebar (status dot and footer). A slow poll next to the Status page's own. */
+function useLink(platform: Platform): Link | null {
+  const { data } = usePoll<Link>(
+    `shell-link-${platform}`,
+    async () => {
+      if (platform === "windows") {
+        const s = await api.winStatus();
+        const ok = s.agent_running && s.tailscale?.running;
+        return {
+          color: ok ? "green" : s.agent_running ? "yellow" : "red",
+          host: s.tailscale?.self_name || "This PC",
+          state: ok ? "Ready for jobs" : s.agent_running ? "Tailscale is off" : "Helper not running",
+        };
+      }
+      const s = await api.statusSnapshot();
+      const refused = s.error_kind === "unauthorized";
+      return {
+        color: s.reachable ? "green" : s.paired && !refused ? "yellow" : "red",
+        host: s.pc_hostname || (s.paired ? "Your PC" : "No PC paired"),
+        state: s.reachable ? (s.redirect_enabled ? "Connected · sending jobs" : "Connected · paused") : refused ? "Pairing refused" : s.paired ? "Sleeping or offline" : "Not connected",
+      };
+    },
+    15000,
+    (l) => l.color === "green",
+  );
+  return data;
+}
+
+function Sidebar({ b, tab, setTab }: { b: Boot; tab: Tab; setTab: (t: Tab) => void }) {
+  const link = useLink(b.platform);
+  return (
+    <aside className="sidebar">
+      <div className="sb-brand">
+        <span className="emblem"><Icon name="bridge" size={20} /></span>
+        <div className="wordmark">
+          <strong>PC Bridge</strong>
+          <div className="tags">
+            <span>v{b.version}</span>
+            <span className="plat">{b.platform === "windows" ? "WINDOWS" : "MAC"}</span>
+          </div>
+        </div>
+      </div>
+      <nav className="nav" role="tablist">
+        <div className="nav-label">CONTROL</div>
+        {TABS.map(([id, label, icon]) => (
+          <button key={id} role="tab" title={label} aria-selected={tab === id} className={tab === id ? "tab active" : "tab"} onClick={() => setTab(id)}>
+            <Icon name={icon} size={17} />
+            <span className="label">{label}</span>
+            {id === "status" && link && <Dot color={link.color} />}
+          </button>
+        ))}
+      </nav>
+      <div className="sb-foot">
+        <div className="kicker"><Icon name="lock" size={12} /> TAILSCALE PRIVATE LINK</div>
+        <div className="host">
+          <Dot color={link?.color ?? "yellow"} />
+          <span title={link?.host}>{link?.host ?? "Checking…"}</span>
+        </div>
+        <div className="state">{link?.state ?? "Looking for the connection"}</div>
+      </div>
+    </aside>
+  );
+}
 
 interface Boot {
   platform: Platform;
@@ -88,26 +156,23 @@ export function App() {
     );
   }
 
+  const title = TABS.find(([id]) => id === tab)?.[1];
   return (
     <div className="shell">
-      <nav className="topnav">
-        <div className="brand">
-          <span className="logo">⇄</span> PC Bridge
-        </div>
-        <div className="tabs" role="tablist">
-          {TABS.map(([id, label]) => (
-            <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "tab active" : "tab"} onClick={() => setTab(id)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <span className="muted small">v{b.version}</span>
-      </nav>
+      <Sidebar b={b} tab={tab} setTab={setTab} />
       <main className="page">
-        {tab === "status" && <Status platform={b.platform} />}
-        {tab === "jobs" && <Jobs platform={b.platform} />}
-        {tab === "settings" && <Settings platform={b.platform} onRerunSetup={() => setWizard(true)} />}
-        {tab === "help" && <Help platform={b.platform} />}
+        <div className="page-inner">
+          <header className="page-head">
+            <div>
+              <div className="kicker">{b.platform === "windows" ? "THIS PC · THE MUSCLE" : "THIS MAC · THE BRAIN"}</div>
+              <h1>{title}</h1>
+            </div>
+          </header>
+          {tab === "status" && <Status platform={b.platform} />}
+          {tab === "jobs" && <Jobs platform={b.platform} />}
+          {tab === "settings" && <Settings platform={b.platform} onRerunSetup={() => setWizard(true)} />}
+          {tab === "help" && <Help platform={b.platform} />}
+        </div>
       </main>
     </div>
   );

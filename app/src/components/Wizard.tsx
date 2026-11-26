@@ -1,4 +1,5 @@
 import { useCallback, useState, type ReactNode } from "react";
+import { Icon } from "./ui";
 
 /**
  * Every wizard step has: what we're doing (one sentence), why it's needed (plain words),
@@ -53,52 +54,60 @@ export function Wizard({
 
   return (
     <div className="wizard">
-      <header className="wizard-head">
-        <div className="brand">{appName} setup</div>
-        <div className="progress-label">
-          Step {index + 1} of {steps.length}
-        </div>
-        <div className="progress">
-          <div className="progress-fill" style={{ width: `${((index + 1) / steps.length) * 100}%` }} />
-        </div>
-        <ol className="step-dots">
-          {steps.map((s, i) => (
-            <li key={s.id} className={i === index ? "current" : i < index ? "past" : ""} title={s.title} />
-          ))}
-        </ol>
-      </header>
+      <div className="card wizard-card">
+        <header className="wizard-head">
+          <div className="wizard-top">
+            <div className="sb-brand">
+              <span className="emblem"><Icon name="bridge" size={20} /></span>
+              <div className="wordmark">
+                <strong>{appName}</strong>
+                <span className="kicker">SETUP</span>
+              </div>
+            </div>
+            <div className="progress-label">
+              Step <b>{String(index + 1).padStart(2, "0")}</b> / {String(steps.length).padStart(2, "0")}
+            </div>
+          </div>
+          <ol className="steps-bar">
+            {steps.map((s, i) => (
+              <li key={s.id} className={i === index ? "current" : i < index ? "past" : ""} title={s.title}>
+                <span className="n">{i < index ? <Icon name="check" size={13} /> : i + 1}</span>
+                {i < steps.length - 1 && <span className="seg" />}
+              </li>
+            ))}
+          </ol>
+        </header>
 
-      <main className="wizard-body">
-        <h1>{step.title}</h1>
-        <div className="whatwhy">
-          <p>
-            <span className="tag">What</span> {step.what}
-          </p>
-          <p>
-            <span className="tag why">Why</span> {step.why}
-          </p>
-        </div>
-        <div className="step-content">
-          {step.body({ setDone, done, next })}
-        </div>
-      </main>
+        <main className="wizard-body">
+          <h1>{step.title}</h1>
+          <div className="whatwhy">
+            <p>
+              <span className="tag">What</span> <span>{step.what}</span>
+            </p>
+            <p>
+              <span className="tag why">Why</span> <span>{step.why}</span>
+            </p>
+          </div>
+          <div className="step-content">{step.body({ setDone, done, next })}</div>
+        </main>
 
-      <footer className="wizard-foot">
-        <button className="btn ghost" disabled={index === 0} onClick={() => go(index - 1)}>
-          ← Back
-        </button>
-        <span className="muted small">You can close the app any time — it remembers where you were.</span>
-        <div className="row">
-          {step.optional && !done && (
-            <button className="btn ghost" onClick={next}>
-              Skip for now
-            </button>
-          )}
-          <button className="btn primary" disabled={!done && !step.optional} onClick={next}>
-            {last ? "Finish" : "Next →"}
+        <footer className="wizard-foot">
+          <button className="btn ghost" disabled={index === 0} onClick={() => go(index - 1)}>
+            <Icon name="left" size={15} /> Back
           </button>
-        </div>
-      </footer>
+          <span className="muted small">You can close the app any time. It remembers where you were.</span>
+          <div className="row">
+            {step.optional && !done && (
+              <button className="btn ghost" onClick={next}>
+                Skip for now
+              </button>
+            )}
+            <button className="btn primary" disabled={!done && !step.optional} onClick={next}>
+              {last ? "Finish" : "Continue"} <Icon name={last ? "check" : "right"} size={15} />
+            </button>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

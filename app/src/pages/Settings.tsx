@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { api, errText, type BridgeConfig, type Platform, type WinState } from "../lib/api";
-import { Card, CopyBox } from "../components/ui";
+import { Card, CopyBox, Icon, Pill, Toggle } from "../components/ui";
 import { ProgramsCard } from "../components/Programs";
 
 function UpdatesCard() {
@@ -13,22 +13,22 @@ function UpdatesCard() {
     try {
       const r = await api.checkForUpdate(false);
       if (!r.available) {
-        setMsg(`✅ You have the latest version (${r.current}).`);
+        setMsg(`You have the latest version (${r.current}).`);
       } else {
         setMsg(`Installing version ${r.version}… PC Bridge will restart by itself.`);
         const done = await api.checkForUpdate(true);
         if (done.waiting) setMsg(`Version ${done.version} is ready. It installs as soon as the current PC job finishes.`);
       }
     } catch (e) {
-      setMsg(`❌ ${errText(e)}`);
+      setMsg(errText(e));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <Card title="Updates">
+    <Card title="Updates" kicker="SIGNED RELEASES" icon="shield">
       <p>PC Bridge updates itself: it checks a few minutes after it starts and then every 6 hours, installs the new version and restarts. Every update is signed, so only real PC Bridge releases are installed.</p>
-      <button className="btn" disabled={busy} onClick={check}>Check for updates now</button>
+      <button className="btn" disabled={busy} onClick={check}><Icon name="refresh" size={14} /> Check for updates now</button>
       {msg && <p className="muted small">{msg}</p>}
     </Card>
   );
@@ -49,35 +49,32 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
   };
   return (
     <div className="stack">
-      <Card title="Redirecting">
-        <label className="switch">
-          <input type="checkbox" checked={cfg.redirect_enabled} onChange={(e) => { api.setRedirect(e.target.checked); setCfg({ ...cfg, redirect_enabled: e.target.checked }); }} />
-          <span>Send heavy jobs to the PC</span>
-        </label>
-        <label className="switch">
-          <input type="checkbox" checked={cfg.notify_on_fallback} onChange={(e) => save({ ...cfg, notify_on_fallback: e.target.checked })} />
-          <span>Notify me when a job had to run on the Mac instead</span>
-        </label>
-        <label className="switch">
-          <input type="checkbox" checked={cfg.notify_on_finish} onChange={(e) => save({ ...cfg, notify_on_finish: e.target.checked })} />
-          <span>Notify me when a PC job that took a minute or more finishes</span>
-        </label>
+      <Card title="Redirecting" kicker="ROUTING" icon="link" primary>
+        <div className="stack-switches">
+          <Toggle checked={cfg.redirect_enabled} onChange={(v) => { api.setRedirect(v); setCfg({ ...cfg, redirect_enabled: v }); }} label="Send heavy jobs to the PC" />
+          <Toggle checked={cfg.notify_on_fallback} onChange={(v) => save({ ...cfg, notify_on_fallback: v })} label="Notify me when a job had to run on the Mac instead" />
+          <Toggle checked={cfg.notify_on_finish} onChange={(v) => save({ ...cfg, notify_on_finish: v })} label="Notify me when a PC job that took a minute or more finishes" />
+        </div>
       </Card>
-      <Card title="Paired PC">
-        <p className="break">{cfg.pc_hostname || cfg.pc_host || "Not paired"} {cfg.pc_host && <span className="muted">({cfg.pc_host})</span>}</p>
-        <p className="muted small break">PC folder: {cfg.pc_root}</p>
+      <Card title="Paired PC" kicker="DEVICE" icon="monitor" actions={cfg.pc_host ? <Pill tone="teal" icon="check">Paired</Pill> : <Pill tone="rose">Not paired</Pill>}>
+        <dl className="kv">
+          <dt>Name</dt><dd>{cfg.pc_hostname || cfg.pc_host || "Not paired"}</dd>
+          {cfg.pc_host && (<><dt>Address</dt><dd className="mono">{cfg.pc_host}</dd></>)}
+          <dt>PC folder</dt><dd className="mono">{cfg.pc_root}</dd>
+        </dl>
         <div className="row">
-          <button className="btn" onClick={onRerunSetup}>Run setup again</button>
+          <button className="btn" onClick={onRerunSetup}><Icon name="refresh" size={14} /> Run setup again</button>
           <button className="btn ghost" onClick={async () => { await api.unpair(); setMsg("Unpaired. Run setup again to pair."); }}>Unpair</button>
         </div>
       </Card>
-      <Card title="Shared folders">
+      <Card title="Shared folders" kicker="SYNC" icon="folder">
         <ul className="folder-list">
           {cfg.shared_folders.map((f) => (
             <li key={f.mac_path}>
+              <Icon name="folder" size={18} />
               <div className="folder-info">
-                <div>📁 {f.mac_path}</div>
-                <div className="muted small">→ PC: workspace\{f.name}</div>
+                <div>{f.mac_path}</div>
+                <div className="muted small">PC · workspace\{f.name}</div>
               </div>
               <button className="btn small ghost" onClick={() => openPath(f.mac_path)}>Open</button>
             </li>
@@ -85,13 +82,13 @@ function MacSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
         </ul>
         <p className="muted small">To change folders, use “Run setup again” → Choose folders.</p>
       </Card>
-      <Card title="Docker & npm/pnpm (per project)">
+      <Card title="Docker & npm/pnpm (per project)" kicker=".PCBRIDGE" icon="terminal">
         <p>Big JavaScript builds and Docker only go to the PC in projects you opt in. Put a file named <code>.pcbridge</code> in the project folder (the folder must be shared) containing:</p>
         <CopyBox command={'offload = ["npm", "pnpm", "docker"]'} explain="Remove any you don't want. Light commands like “npm install” still run on the Mac; builds and test suites go to the PC." />
         <p className="muted small">You can also send any single command from Terminal:</p>
-        <CopyBox command={"pc-bridge run -- npm run build"} explain="“Run this on the PC” — works for any command inside a shared folder. (The helper commands must be installed: Run setup again → Connect to Claude.)" />
+        <CopyBox command={"pc-bridge run -- npm run build"} explain="“Run this on the PC”: works for any command inside a shared folder. (The helper commands must be installed: Run setup again → Connect to Claude.)" />
       </Card>
-      <Card title="Claude connection">
+      <Card title="Claude connection" kicker="MCP" icon="spark">
         <div className="row">
           <button className="btn" onClick={() => api.claudeInstall(true, true).then((r) => setMsg(r.join(" · "))).catch((e) => setMsg(errText(e)))}>Reconnect to Claude</button>
           <button className="btn ghost" onClick={() => api.claudeUninstall().then(() => setMsg("Removed PC Bridge from Claude, CLAUDE.md and your PATH."))}>Disconnect from Claude</button>
@@ -113,23 +110,20 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
   if (!ws) return null;
   return (
     <div className="stack">
-      <Card title="Startup">
-        <label className="switch">
-          <input type="checkbox" checked={auto} onChange={(e) => { setAuto(e.target.checked); api.winSetAutostart(e.target.checked); }} />
-          <span>Start PC Bridge with Windows</span>
-        </label>
+      <Card title="Startup" kicker="WINDOWS" icon="power" primary>
+        <Toggle checked={auto} onChange={(v) => { setAuto(v); api.winSetAutostart(v); }} label="Start PC Bridge with Windows" />
       </Card>
-      <Card title="Files">
-        <p>Everything PC Bridge writes is inside <strong>{ws.root}</strong>.</p>
+      <Card title="Files" kicker="STORAGE" icon="folder">
+        <p>Everything PC Bridge writes is inside <strong className="mono">{ws.root}</strong>.</p>
         <div className="row">
-          <button className="btn" onClick={() => openPath(ws.root)}>Open folder</button>
+          <button className="btn" onClick={() => openPath(ws.root)}><Icon name="folder" size={14} /> Open folder</button>
           <button className="btn ghost" onClick={() => openPath(`${ws.root}\\logs`)}>Open logs</button>
         </div>
         <p className="muted small">Job folders older than 14 days are deleted automatically (change “cleanup_days” in {ws.root}\config\settings.json).</p>
       </Card>
       <UpdatesCard />
       <ProgramsCard />
-      <Card title="Helper">
+      <Card title="Helper" kicker="AGENT" icon="pulse">
         <p>The helper is the background program your Mac talks to. Restart it if something you just installed (like FFmpeg) still shows as missing.</p>
         <button
           className="btn"
@@ -138,9 +132,9 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
             setHelper("Restarting…");
             try {
               const r = await api.winRestartHelper();
-              setHelper(`✅ Helper running (version ${r.version})`);
+              setHelper(`Helper running (version ${r.version})`);
             } catch (e) {
-              setHelper(`❌ ${errText(e)}`);
+              setHelper(errText(e));
             }
           }}
         >
@@ -148,7 +142,7 @@ function WinSettings({ onRerunSetup }: { onRerunSetup: () => void }) {
         </button>
         {helper && <p className="muted small">{helper}</p>}
       </Card>
-      <Card title="Pairing">
+      <Card title="Pairing" kicker="TRUST" icon="lock">
         <PairedMacs />
         <button className="btn" onClick={onRerunSetup}>Show a pairing code / run setup again</button>
       </Card>
@@ -176,10 +170,11 @@ function PairedMacs() {
         <ul className="plain-list">
           {list.map((d) => (
             <li key={d.index}>
+              <Icon name="laptop" size={16} />
               <strong>{d.name}</strong>{" "}
               <span className="muted small">paired {new Date(d.paired_at * 1000).toLocaleDateString()}</span>{" "}
               <button
-                className="btn small"
+                className="btn small ghost danger"
                 onClick={() =>
                   api
                     .winRemoveMac(d.index)

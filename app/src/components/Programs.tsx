@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errText, type PcProgram, type ProgramsInfo } from "../lib/api";
 import { driveName, hasRoom, sizeText, spaceNeededGb } from "../lib/format";
-import { Card, CheckResult, type CheckState } from "./ui";
+import { Card, CheckResult, Icon, Pill, type CheckState } from "./ui";
 
 /** Below this much free space we warn, even before any install is tried. */
 const LOW_SPACE_GB = 10;
@@ -101,13 +101,13 @@ export function InstallStatus({ state }: { state?: InstallState }) {
 function ProgramRow({ p, info, busy, state, onInstall }: { p: PcProgram; info: ProgramsInfo; busy: string; state?: InstallState; onInstall: () => void }) {
   const room = hasRoom(info.free_gb, p.size_gb);
   return (
-    <li className="program-row">
+    <li className={p.installed ? "program-tile installed" : "program-tile"}>
+      <div className="program-top">
+        <strong><Icon name="box" size={16} />{p.name}</strong>
+        {p.installed && <Pill tone="teal" icon="check">Installed</Pill>}
+      </div>
+      <p className="program-why">{p.why}</p>
       <div className="program-info">
-        <strong>{p.name}</strong> — {p.why}
-        <div className="muted small">
-          {sizeText(p.size_gb)}
-          {!p.installed && !room && ` · needs about ${spaceNeededGb(p.size_gb)} GB free`}
-        </div>
         {state?.restart ? (
           <InstallStatus state={state} />
         ) : state?.status === "ok" ? (
@@ -120,13 +120,17 @@ function ProgramRow({ p, info, busy, state, onInstall }: { p: PcProgram; info: P
           <InstallStatus state={state} />
         )}
       </div>
-      {p.installed ? (
-        <span className="program-ok">✅ Installed</span>
-      ) : (
-        <button className="btn small" disabled={!!busy || !room} onClick={onInstall}>
-          {busy === p.key ? "Installing…" : "Install"}
-        </button>
-      )}
+      <div className="program-foot">
+        <span className="muted">
+          {sizeText(p.size_gb)}
+          {!p.installed && !room && ` · needs about ${spaceNeededGb(p.size_gb)} GB free`}
+        </span>
+        {!p.installed && (
+          <button className="btn small" disabled={!!busy || !room} onClick={onInstall}>
+            {busy === p.key ? <><span className="spinner tiny" /> Installing…</> : <><Icon name="plus" size={13} /> Install</>}
+          </button>
+        )}
+      </div>
     </li>
   );
 }
@@ -140,7 +144,7 @@ export function ProgramsCard() {
   const drive = info ? driveName(info.drive) : "C:";
   const low = info && info.free_gb >= 0 && info.free_gb < LOW_SPACE_GB;
   return (
-    <Card title="Programs" actions={<button className="btn small ghost" disabled={!!busy} onClick={() => reload()}>Check again</button>}>
+    <Card title="Programs" kicker="TOOLCHAIN" icon="box" actions={<button className="btn small ghost" disabled={!!busy} onClick={() => reload()}><Icon name="refresh" size={13} /> Check again</button>}>
       <p>Programs your Mac can use on this PC. Click “Install” to add one; Claude can then send that kind of work here.</p>
       {error && <CheckResult state={{ status: "fail", message: error }} />}
       {info && (
@@ -150,10 +154,10 @@ export function ProgramsCard() {
           </p>
           {low && (
             <p className="advice">
-              ⚠️ The {drive} drive is almost full. Big programs like PyTorch may not fit. Free up space in Windows Settings → System → Storage first.
+              The {drive} drive is almost full. Big programs like PyTorch may not fit. Free up space in Windows Settings → System → Storage first.
             </p>
           )}
-          <ul className="tool-list program-list">
+          <ul className="program-grid">
             {info.programs.map((p) => (
               <ProgramRow key={p.key} p={p} info={info} busy={busy} state={states[p.key]} onInstall={() => install(p, info)} />
             ))}
